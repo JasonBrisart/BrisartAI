@@ -2,68 +2,236 @@
 
 **Pure Python. No Dependencies. Local-First. Inspectable.**
 
-BrisartAI turns your own files, folders, archives, notes, logs, and saved web pages into a local searchable knowledge system. It can also optionally connect to the internet, search for public results, crawl selected pages, and compare outside information against your local data.
+BrisartAI is a local research assistant that transforms files, folders, notes, archives, project repositories, and web research into a searchable knowledge system.
 
-## Core Idea
+Unlike cloud-based AI systems, BrisartAI is designed to run locally, store data locally, and remain fully inspectable. Every component is written in standard Python and can be reviewed, modified, and audited.
+
+---
+
+# Philosophy
+
+BrisartAI was built around a simple principle:
 
 ```text
-plug your data in -> BrisartAI indexes it -> ask questions -> get sourced answers
-                                      \
-                                       optional internet search/crawl
+Your data should remain your data.
 ```
 
-## What It Does
+The project prioritizes:
 
-- Ingests local folders and files
-- Reads `.txt`, `.md`, `.py`, `.html`, `.csv`, `.log`, `.ini`, `.cfg`, `.rst`
-- Stores text in local SQLite
-- Builds a keyword index
-- Analyzes folder contents
-- Answers questions from local data
-- Cites files and URLs
-- Optionally searches the web and crawls public pages
-- Uses only Python standard library
+- Local-first operation
+- Explainable behavior
+- Source-grounded answers
+- Inspectable code
+- Pure Python implementation
+- Minimal dependencies
+- Optional internet access
 
-## Quick Start
+Local information is treated as the primary source of truth.
+
+Internet access is optional and exists only to provide additional research context when explicitly enabled.
+
+---
+
+# Core Workflow
+
+```text
+Files, Folders, Archives
+            │
+            ▼
+       BrisartAI
+            │
+            ▼
+     Local SQLite Index
+            │
+            ▼
+      Search & Analysis
+            │
+            ▼
+     Source-Grounded Answers
+```
+
+---
+
+# Features
+
+## Knowledge Indexing
+
+BrisartAI can ingest:
+
+- Project folders
+- Research archives
+- Source code repositories
+- Notes and documentation
+- Configuration files
+- Logs and exports
+- Saved web pages
+
+All indexed content is stored in a local SQLite database.
+
+---
+
+## Local Search
+
+Search across indexed information using natural language:
+
+```text
+What is this project about?
+
+Which files mention preservation?
+
+Summarize the indexed archive.
+```
+
+---
+
+## Source-Grounded Responses
+
+When evidence exists, BrisartAI answers using indexed sources.
+
+Responses include:
+
+- Retrieved evidence
+- Supporting observations
+- Reasoning explanations
+- Source references
+- Suggested next actions
+
+---
+
+## Analysis
+
+Analyze indexed datasets to identify:
+
+- Recurring themes
+- Common terminology
+- File distributions
+- Project structure patterns
+- Potential documentation gaps
+
+---
+
+## Recommendations
+
+Generate recommendations based on indexed information.
+
+Examples include:
+
+- Missing documentation
+- Duplicate content
+- Large files
+- Organizational improvements
+- Data hygiene observations
+
+---
+
+## Drive and Folder Scanning
+
+BrisartAI can scan large folder structures for supported content.
+
+The scanner uses conservative defaults and automatically avoids common system, cache, and dependency directories.
+
+---
+
+## Optional Internet Research
+
+BrisartAI can optionally:
+
+- Search public websites
+- Crawl approved URLs
+- Compare outside information against local data
+
+Internet access is never required.
+
+---
+
+# Supported File Types
+
+## Text and Documentation
+
+- .txt
+- .md
+- .markdown
+- .rst
+- .rtf
+- .log
+
+## Data Formats
+
+- .csv
+- .tsv
+- .json
+- .jsonl
+- .xml
+- .yaml
+- .yml
+- .toml
+- .ini
+- .cfg
+- .conf
+
+## Source Code
+
+- .py
+- .js
+- .ts
+- .jsx
+- .tsx
+- .java
+- .c
+- .cpp
+- .h
+- .cs
+- .go
+- .rs
+- .sh
+- .ps1
+- .bat
+- .sql
+
+## Web Content
+
+- .html
+- .htm
+- .css
+- .svg
+
+## Office Documents
+
+Best-effort pure-Python extraction:
+
+- .docx
+- .pptx
+- .xlsx
+- .odt
+
+## PDF
+
+Best-effort pure-Python extraction:
+
+- .pdf
+
+The objective is searchable text extraction, not perfect document rendering.
+
+---
+
+# Quick Start
+
+Display index status:
 
 ```bash
 python brisartai.py status
+```
+
+Ingest local data:
+
+```bash
 python brisartai.py ingest ./my_data
+```
+
+Analyze indexed information:
+
+```bash
 python brisartai.py analyze
-python brisartai.py ask "what is this data about"
-```
-
-Optional internet mode:
-
-```bash
-python brisartai.py web "digital preservation fixity checks" --limit 5
-python brisartai.py ask "compare my archive workflow with current preservation practices" --web
-```
-
-## Important Honesty Note
-
-BrisartAI is not a ChatGPT-scale neural model. It is a local, inspectable, source-grounded research assistant. It retrieves and synthesizes information from indexed data instead of generating unsupported claims from a hidden neural model.
-
-## Version
-
-`0.6.0-alpha`
-
-
-## Drive Scanning and Recommendations
-
-BrisartAI can now scan broad folders or likely drive roots for supported text-like files.
-It is intentionally conservative by default and skips common system, cache, hidden, and dependency folders.
-
-Preview first:
-
-```bash
-python brisartai.py scan-drive C:\Users\Jason --preview
-```
-
-Ingest after preview:
-
-```bash
-python brisartai.py scan-drive C:\Users\Jason --max-files 10000
 ```
 
 Generate recommendations:
@@ -72,70 +240,112 @@ Generate recommendations:
 python brisartai.py recommend
 ```
 
-Recommendations are based only on indexed data. BrisartAI does not upload your files.
-
-
-## Living Logical Voice
-
-BrisartAI now has a response layer that makes it feel more like an analytical assistant:
-
-- opens with what it reviewed
-- separates observations from evidence
-- explains why it reached a conclusion
-- gives confidence labels based on retrieval strength
-- suggests one practical next move
-- keeps local session memory for recent topics
-
-It does **not** claim to be conscious or sentient. The goal is to make it feel present, logical, and useful while staying grounded in inspectable evidence.
-
-
-## Free-Form Assistant Mode
-
-BrisartAI now responds to anything typed into `ask` or `chat`.
-
-If indexed evidence exists, it answers from imported files and cites sources.
-If no indexed evidence matches, it still responds conversationally but clearly says that the answer is not grounded in imported files yet.
+Ask a question:
 
 ```bash
-python brisartai.py ask "hello"
-python brisartai.py ask "what should I do next"
-python brisartai.py chat
+python brisartai.py ask "what is this project about"
 ```
 
-## Expanded File Types
+Launch interactive mode:
 
-BrisartAI now supports many more text-like and best-effort readable formats:
-
-- text/docs: `.txt`, `.md`, `.rst`, `.rtf`, `.srt`, `.vtt`
-- data/config: `.csv`, `.tsv`, `.json`, `.jsonl`, `.xml`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.conf`, `.env`
-- code/scripts: `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.java`, `.c`, `.cpp`, `.h`, `.cs`, `.go`, `.rs`, `.sh`, `.ps1`, `.bat`, `.sql`, `.tex`
-- web: `.html`, `.htm`, `.css`, `.svg`
-- Office/OpenDocument best-effort: `.docx`, `.pptx`, `.xlsx`, `.odt`
-- PDF best-effort: `.pdf`
-
-Office and PDF extraction is pure-Python best effort. It is designed for searchable text, not perfect document rendering.
-
-
-## v0.6 Chat UX Fix
-
-Running with no arguments now starts BrisartAI directly:
-
-```cmd
-py brisartai.py
+```bash
+python brisartai.py
 ```
 
-Inside the `BrisartAI>` shell, type normally:
+or
 
-```text
-BrisartAI> hello
-BrisartAI> what do you do for a living
-BrisartAI> can you speak normally without indexed files?
-```
-
-You do **not** need to type `py brisartai.py ask` inside chat mode. If you accidentally do, BrisartAI cleans it up and treats it as the actual question.
-
-There is also a Windows launcher:
-
-```cmd
+```bash
 start.bat
 ```
+
+---
+
+# Project Structure
+
+```text
+brisart_ai/
+
+├── core/
+│   ├── conversation engine
+│   ├── memory
+│   └── assistant interface
+│
+├── intelligence/
+│   ├── self knowledge
+│   ├── personality
+│   └── freeform conversation
+│
+├── io/
+│   ├── readers
+│   ├── extractors
+│   └── input processing
+│
+├── knowledge/
+│   ├── indexing
+│   ├── retrieval
+│   ├── ranking
+│   └── synthesis
+│
+├── scanning/
+│   └── drive discovery
+│
+├── recommendations/
+│   └── recommendation engine
+│
+└── web/
+    └── optional internet research
+```
+
+This structure keeps subsystems isolated, inspectable, and easy to maintain.
+
+---
+
+# Limitations
+
+BrisartAI is intentionally simple.
+
+Current limitations include:
+
+- Not a large neural model
+- Cannot know information that has not been indexed
+- Retrieval quality depends on indexed content
+- Office and PDF parsing are best-effort
+- Internet access may be unavailable in air-gapped environments
+
+---
+
+# Documentation
+
+Additional documentation is available in:
+
+```text
+docs/
+├── architecture.md
+├── commands.md
+├── drive_scanning.md
+├── file_types.md
+├── personality.md
+└── safety.md
+```
+
+---
+
+# Design Goals
+
+BrisartAI aims to be:
+
+- Local
+- Transparent
+- Maintainable
+- Explainable
+- Air-gap friendly
+- Dependency free
+- Easy to audit
+
+The project favors simplicity and inspectability over complexity and hidden behavior.
+
+---
+
+# License
+
+See `LICENSE` for licensing information.
