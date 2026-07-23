@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0-alpha
+
+Added:
+- Knowledge Vault layer built on the existing SQLite index
+- Research collections for grouping indexed sources
+- Local research notes with search
+- Lightweight entity extraction and source-to-entity links
+- Timeline view around a topic or term
+- Vault report and project/research awareness reports
+
+Fixed:
+- Corrected a syntax error in io/readers.py that prevented startup
+- Aligned package version number with the actual release
+  
 ## 0.6.0-alpha
 
 Fixed:
