@@ -1,5 +1,4 @@
 """Source-grounded response synthesis for BrisartAI."""
-
 from __future__ import annotations
 
 import collections
@@ -16,7 +15,6 @@ from brisart_ai.intelligence.personality import (
 )
 from brisart_ai.util import split_sentences, tokenize
 
-
 Document = Dict[str, object]
 Candidate = Tuple[float, int, str, Document]
 
@@ -26,42 +24,46 @@ def sentence_score(
     query_terms: Set[str],
 ) -> float:
     """Score a sentence by query-term overlap and density."""
-
     words = tokenize(sentence)
-
     if not words:
         return 0.0
-
     counts = collections.Counter(words)
     overlap = sum(
         counts[term]
         for term in query_terms
     )
-
     density = overlap / max(1, len(words))
-
     return float(overlap + density)
+
+
+def _clean_sentence(sentence: str) -> str:
+    """Tidy a raw extracted sentence for readable display.
+
+    Collapses runs of whitespace, strips stray leading punctuation,
+    and normalizes spacing around basic punctuation. Does not alter
+    wording, so answers remain faithful to the source text.
+    """
+    text = re.sub(r"\s+", " ", sentence).strip()
+    text = text.lstrip(".,;:|-  ").strip()
+    text = re.sub(r"\s+([.,;:])", r"\1", text)
+    return text
 
 
 def format_source(
     document: Document,
 ) -> str:
     """Format a source reference for display."""
-
     source_type = str(
         document.get("source_type", "source")
     )
-
     location = str(
         document.get("location", "")
     )
-
     title = str(
         document.get("title")
         or location
         or "Untitled source"
     )
-
     return (
         f"{source_type}: {title} :: {location}"
     )
@@ -71,39 +73,33 @@ def _source_pattern_note(
     documents: List[Document],
 ) -> str:
     """Explain the local-versus-web evidence pattern."""
-
     local_count = sum(
         1
         for document in documents
         if document.get("source_type") == "file"
     )
-
     web_count = sum(
         1
         for document in documents
         if document.get("source_type") == "web"
     )
-
     if local_count and web_count:
         return (
             "I found both local files and web-indexed "
             "material. Local data was treated as primary "
             "evidence and web material as supporting context."
         )
-
     if local_count:
         return (
             "The answer is based on local indexed files, "
             "keeping the result tied to inspectable data "
             "on this machine."
         )
-
     if web_count:
         return (
             "The answer is based on web-indexed pages "
             "because no matching local files were retrieved."
         )
-
     return "The retrieved evidence is limited."
 
 
@@ -111,7 +107,6 @@ def _deduplication_key(
     sentence: str,
 ) -> str:
     """Build a stable key for duplicate sentence removal."""
-
     return re.sub(
         r"\W+",
         "",
@@ -127,7 +122,6 @@ def synthesize(
     recent_topics: Iterable[str] | None = None,
 ) -> str:
     """Generate an evidence-grounded answer from ranked documents."""
-
     if not docs:
         return "\n".join(
             [
@@ -151,7 +145,6 @@ def synthesize(
         1,
         int(max_sources),
     )
-
     safe_sentence_limit = max(
         1,
         int(max_sentences),
@@ -167,13 +160,11 @@ def synthesize(
         text = str(
             document.get("text", "")
         )
-
         for sentence in split_sentences(text):
             score = sentence_score(
                 sentence,
                 query_terms,
             )
-
             if score > 0:
                 candidates.append(
                     (
@@ -191,14 +182,11 @@ def synthesize(
 
     chosen: List[Candidate] = []
     seen = set()
-
     for candidate in candidates:
         score, source_number, sentence, document = candidate
         key = _deduplication_key(sentence)
-
         if not key or key in seen:
             continue
-
         seen.add(key)
         chosen.append(
             (
@@ -208,7 +196,6 @@ def synthesize(
                 document,
             )
         )
-
         if len(chosen) >= safe_sentence_limit:
             break
 
@@ -236,76 +223,64 @@ def synthesize(
             ]
         )
 
+    # Group chosen sentences by their original source, then assign
+    # sequential display numbers so citations read 1, 2, 3 with no gaps.
     by_source: Dict[int, List[str]] = (
         collections.defaultdict(list)
     )
-
-    docs_by_number: Dict[int, Document] = {}
+    original_docs: Dict[int, Document] = {}
     best_score = 0.0
-
     for (
         score,
         source_number,
         sentence,
         document,
     ) in chosen:
-        by_source[source_number].append(sentence)
-        docs_by_number[source_number] = document
+        by_source[source_number].append(_clean_sentence(sentence))
+        original_docs[source_number] = document
         best_score = max(best_score, score)
+
+    display_number: Dict[int, int] = {}
+    for new_index, original_number in enumerate(
+        sorted(by_source),
+        start=1,
+    ):
+        display_number[original_number] = new_index
 
     lines = [
         opening(
             "answer",
             len(docs),
-        )
-    ]
-
-    if recent_topics:
-        topics = [
-            str(topic).strip()
-            for topic in recent_topics
-            if str(topic).strip()
-        ][:3]
-
-        if topics:
-            lines.append(
-                "Context I still have in view: "
-                + " | ".join(topics)
-            )
-
-    lines.append(
+        ),
         observation(
             _source_pattern_note(docs)
-        )
-    )
+        ),
+        (
+            "Confidence: "
+            f"{confidence_label(best_score)} "
+            "based on retrieved sentence overlap."
+        ),
+        "",
+        "Answer:",
+    ]
 
-    lines.append(
-        "Confidence: "
-        f"{confidence_label(best_score)} "
-        "based on retrieved sentence overlap."
-    )
-
-    lines.append("")
-    lines.append("Answer:")
-
-    for source_number in sorted(by_source):
+    for original_number in sorted(by_source):
         paragraph = " ".join(
-            by_source[source_number][:3]
+            by_source[original_number][:3]
         )
-
         lines.append(
-            f"[{source_number}] {paragraph}"
+            f"[{display_number[original_number]}] {paragraph}"
         )
+        lines.append("")
 
     reasoning_items = [
         (
             f"I found {len(chosen)} relevant "
             f"passage{'s' if len(chosen) != 1 else ''} "
-            f"across {len(docs_by_number)} cited "
-            f"source{'s' if len(docs_by_number) != 1 else ''}."
+            f"across {len(by_source)} cited "
+            f"source{'s' if len(by_source) != 1 else ''}."
         )
     ]
-
     if query_terms:
         reasoning_items.append(
             "The strongest matches were tied to "
@@ -315,28 +290,26 @@ def synthesize(
             )
             + "."
         )
-
     reasoning_items.append(
         _source_pattern_note(docs)
     )
 
-    lines.append("")
+    lines.append("Why I think this:")
     lines.extend(
         reasoning_bullets(
             reasoning_items
         )
     )
-
     lines.append("")
+
     lines.append("Sources:")
-
-    for source_number in sorted(docs_by_number):
+    for original_number in sorted(original_docs):
         lines.append(
-            f"[{source_number}] "
-            f"{format_source(docs_by_number[source_number])}"
+            f"[{display_number[original_number]}] "
+            f"{format_source(original_docs[original_number])}"
         )
-
     lines.append("")
+
     lines.append(
         next_step(
             "Ask a narrower follow-up to inspect "
