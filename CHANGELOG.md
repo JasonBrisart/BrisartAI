@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.0-alpha
+
+Added:
+- Split the command-line interface into focused modules: commands.py (command handlers), chat.py (interactive shell), and cli.py (argument parser and entry point)
+- _clean_sentence() helper in synthesizer.py for readable answer formatting
+
+Changed:
+- assistant.py is now a compatibility shim that re-exports the public API, so existing imports such as `from brisart_ai.core.assistant import cmd_chat, main` keep working
+- Answer output is now spaced into readable blocks instead of a single wall of text
+
+Fixed:
+- Citation numbering is now sequential with no gaps (previously skipped numbers when duplicate passages were removed)
+- Removed the noisy tokenized "Context I still have in view" line from answers
+  
 ## 0.7.0-alpha
 
 Added:
