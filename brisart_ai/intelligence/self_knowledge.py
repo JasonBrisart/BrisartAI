@@ -1,5 +1,4 @@
-"""
-Self-knowledge responses for BrisartAI.
+"""Self-knowledge responses for BrisartAI.
 
 BrisartAI can explain:
 - who it is
@@ -14,9 +13,9 @@ from __future__ import annotations
 
 from typing import Iterable, List
 
-from . import APP_NAME, __version__
-from .personality import next_step
-from .util import tokenize
+from brisart_ai import APP_NAME, __version__
+from brisart_ai.intelligence.personality import next_step
+from brisart_ai.util import tokenize
 
 
 SELF_TERMS = {
@@ -44,7 +43,7 @@ SELF_TERMS = {
 
 
 def looks_like_self_question(text: str) -> bool:
-
+    """Return True if the question appears to be about BrisartAI itself."""
     lowered = text.lower().strip()
 
     phrases = [
@@ -67,16 +66,15 @@ def looks_like_self_question(text: str) -> bool:
         return True
 
     terms = set(tokenize(lowered))
-
     return bool(terms & SELF_TERMS)
 
 
 def self_response(
     user_text: str,
     index=None,
-    recent_topics: Iterable[str] | None = None
+    recent_topics: Iterable[str] | None = None,
 ) -> str:
-
+    """Return BrisartAI self-knowledge response."""
     lowered = user_text.lower()
 
     total = index.source_count() if index else 0
@@ -85,24 +83,15 @@ def self_response(
 
     lines: List[str] = []
 
-    #
-    # MEMORY
-    #
-
     if "memory" in lowered or "remember" in lowered:
-
         lines.append("BrisartAI Memory")
         lines.append("")
 
         if recent_topics:
-
             lines.append("Recent Topics:")
-
             for topic in list(recent_topics)[:10]:
                 lines.append(f"- {topic}")
-
         else:
-
             lines.append("No recent topics available.")
 
         lines.append("")
@@ -113,12 +102,7 @@ def self_response(
 
         return "\n".join(lines)
 
-    #
-    # LIMITS
-    #
-
     if "limit" in lowered:
-
         return (
             "BrisartAI Limits\n\n"
             "- Cannot know information that has not been indexed\n"
@@ -130,12 +114,7 @@ def self_response(
             "Local, inspectable, source-grounded reasoning."
         )
 
-    #
-    # THINKING
-    #
-
     if "think" in lowered or "reasoning" in lowered:
-
         return (
             "Reasoning Model\n\n"
             "1. Receive input\n"
@@ -149,75 +128,58 @@ def self_response(
             "evidence-driven whenever possible."
         )
 
-    #
-    # ARCHITECTURE
-    #
-
     if "architecture" in lowered or "system" in lowered:
-
         return (
             "BrisartAI Architecture\n\n"
             "Input\n"
-            "  ↓\n"
+            "  ->\n"
             "Ingestion\n"
-            "  ↓\n"
+            "  ->\n"
             "SQLite Index\n"
-            "  ↓\n"
+            "  ->\n"
             "Retrieval\n"
-            "  ↓\n"
+            "  ->\n"
             "Synthesis\n"
-            "  ↓\n"
+            "  ->\n"
             "Response\n\n"
             "Major Modules:\n"
-            "- readers.py\n"
-            "- ingest.py\n"
-            "- index.py\n"
-            "- ranker.py\n"
-            "- synthesizer.py\n"
-            "- conversation.py\n"
-            "- self_knowledge.py\n"
+            "- brisart_ai/io/readers.py\n"
+            "- brisart_ai/knowledge/ingest.py\n"
+            "- brisart_ai/knowledge/index.py\n"
+            "- brisart_ai/knowledge/ranker.py\n"
+            "- brisart_ai/knowledge/synthesizer.py\n"
+            "- brisart_ai/core/conversation.py\n"
+            "- brisart_ai/intelligence/self_knowledge.py\n"
         )
-
-    #
-    # GENERAL SELF RESPONSE
-    #
 
     lines.append(f"{APP_NAME} {__version__}")
     lines.append("")
     lines.append("Identity")
     lines.append("--------")
-    lines.append(
-        "Pure-Python local-first research assistant."
-    )
-
+    lines.append("Pure-Python local-first research assistant.")
     lines.append("")
     lines.append("Environment")
     lines.append("-----------")
     lines.append(f"Indexed Sources: {total}")
     lines.append(f"Local Files: {files}")
     lines.append(f"Web Pages: {web}")
-
     lines.append("")
     lines.append("Capabilities")
     lines.append("------------")
-
     lines.append("")
     lines.append("Research")
     lines.append("- Search indexed data")
     lines.append("- Analyze repositories")
     lines.append("- Summarize content")
-
     lines.append("")
     lines.append("Knowledge")
     lines.append("- Build SQLite knowledge base")
     lines.append("- Retrieve evidence")
     lines.append("- Explain conclusions")
-
     lines.append("")
     lines.append("Internet")
     lines.append("- Optional web search")
     lines.append("- Optional website crawling")
-
     lines.append("")
     lines.append("Local Operations")
     lines.append("- File ingestion")
@@ -225,15 +187,12 @@ def self_response(
     lines.append("- Recommendation generation")
 
     if recent_topics:
-
         topics = list(recent_topics)[:5]
 
         if topics:
-
             lines.append("")
             lines.append("Memory")
             lines.append("------")
-
             for topic in topics:
                 lines.append(f"- {topic}")
 

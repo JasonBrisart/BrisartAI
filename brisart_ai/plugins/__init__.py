@@ -1,0 +1,3 @@
+"""
+BrisartAI plugin package.
+"""

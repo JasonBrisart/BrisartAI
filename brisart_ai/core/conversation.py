@@ -10,14 +10,18 @@ Order of logic:
 
 from __future__ import annotations
 
-from .freeform import freeform_response
-from .input_cleaner import normalize_shellish_input
-from .ranker import search
-from .self_knowledge import looks_like_self_question, self_response
-from .synthesizer import synthesize
+from brisart_ai.intelligence.freeform import freeform_response
+from brisart_ai.io.input_cleaner import normalize_shellish_input
+from brisart_ai.intelligence.self_knowledge import (
+    looks_like_self_question,
+    self_response,
+)
+from brisart_ai.knowledge.ranker import search
+from brisart_ai.knowledge.synthesizer import synthesize
 
 
 def build_conversation_answer(query: str, index, memory, limit: int = 8) -> str:
+    """Build a source-grounded or conversational answer."""
     cleaned = normalize_shellish_input(query)
     recent = memory.recent_topics(limit=4)
 
@@ -28,6 +32,7 @@ def build_conversation_answer(query: str, index, memory, limit: int = 8) -> str:
         return answer
 
     docs = search(index, cleaned, limit=limit)
+
     if docs:
         answer = synthesize(cleaned, docs, recent_topics=recent)
     else:
@@ -35,4 +40,5 @@ def build_conversation_answer(query: str, index, memory, limit: int = 8) -> str:
 
     memory.add("user", cleaned)
     memory.add("assistant", answer)
+
     return answer

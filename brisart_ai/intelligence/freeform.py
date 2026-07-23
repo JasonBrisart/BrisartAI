@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Iterable, List
 
 from .personality import observation
-from .util import tokenize
+from brisart_ai.util import tokenize
 
 
 def _classify_intent(text: str) -> str:
