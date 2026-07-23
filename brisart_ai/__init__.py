@@ -1,4 +1,4 @@
 """BrisartAI package."""
 
 APP_NAME = "BrisartAI"
-__version__ = "3.0.0"
+__version__ = "0.7.0-alpha"

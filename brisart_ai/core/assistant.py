@@ -1,6 +1,6 @@
 """BrisartAI command-line interface.
 
-v0.7.0-alpha upgrade:
+Feature layers (see CHANGELOG.md for version history):
 - Knowledge Vault
 - Research Collections
 - Research Notes
