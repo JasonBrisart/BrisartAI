@@ -19,7 +19,6 @@ Changed:
 Web Subsystem Layout:
 
 web/
-├── __init__.py
 ├── policy.py
 ├── models.py
 ├── stats.py
