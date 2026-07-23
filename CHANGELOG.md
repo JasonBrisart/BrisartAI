@@ -13,6 +13,7 @@ Changed:
 Fixed:
 - Citation numbering is now sequential with no gaps (previously skipped numbers when duplicate passages were removed)
 - Removed the noisy tokenized "Context I still have in view" line from answers
+- Import and use __version__ from the brisart_ai package instead of hardcoding the version string. This ensures the USER_AGENT always reflects the actual package version.
   
 ## 0.7.0-alpha
 
