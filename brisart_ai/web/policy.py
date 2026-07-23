@@ -6,7 +6,8 @@ import threading
 import urllib.parse
 import urllib.robotparser
 
-USER_AGENT = "BrisartAI/0.2 (+local-first research assistant; respectful crawler)"
+from brisart_ai import __version__
+USER_AGENT = f"BrisartAI/{__version__} (+local-first research assistant; respectful crawler)"
 
 
 class RobotsCache:
