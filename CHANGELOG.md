@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.9.0-alpha
+
+Added:
+- Crawl statistics reporting for web ingestion operations
+- Duplicate-content detection before indexing crawled pages
+- Localhost protection to prevent accidental crawling of local machine resources
+
+Changed:
+- Refactored the web subsystem into focused modules
+- Moved `FetchResult` into `web/models.py`
+- Moved crawl statistics into `web/stats.py`
+- Moved URL retrieval and extraction into `web/fetcher.py`
+- Moved public web search functionality into `web/search.py`
+- Consolidated crawling, indexing, and ingestion logic into `web/crawler.py`
+- Improved maintainability and auditability through a modular web architecture
+
+Web Subsystem Layout:
+
+web/
+├── __init__.py
+├── policy.py
+├── models.py
+├── stats.py
+├── fetcher.py
+├── search.py
+├── crawler.py
+
 ## 0.8.0-alpha
 
 Added:
