@@ -7,9 +7,10 @@ the real logic lives in the knowledge, scanning, and web modules.
 from __future__ import annotations
 
 from brisart_ai import APP_NAME, __version__
-from brisart_ai.intelligence.freeform import freeform_response
 from brisart_ai.core.conversation import build_conversation_answer
 from brisart_ai.core.session_memory import SessionMemory
+from brisart_ai.core.settings import ResearchSettings
+from brisart_ai.intelligence.freeform import freeform_response
 from brisart_ai.io.input_cleaner import normalize_shellish_input
 from brisart_ai.knowledge.analyzer import analyze_index
 from brisart_ai.knowledge.index import DEFAULT_DB, Index
@@ -81,7 +82,6 @@ def cmd_scan(
     max_file_bytes: int,
 ) -> None:
     roots = paths or default_scan_roots()
-
     if preview:
         print(
             scan_preview(
@@ -92,9 +92,7 @@ def cmd_scan(
             )
         )
         return
-
     index = Index(db_path)
-
     try:
         count = scan_and_ingest(
             roots,
@@ -140,6 +138,13 @@ def cmd_web(query: str, db_path: str, limit: int, depth: int) -> None:
         index.close()
 
 
+# BrisartAI now calls this "research" in the simplified command set.
+# Kept as a thin alias so /web and /research behave identically.
+def cmd_research(query: str, db_path: str, limit: int, depth: int) -> None:
+    """Explicit, on-demand web research (alias of cmd_web)."""
+    cmd_web(query, db_path, limit, depth)
+
+
 def cmd_crawl(
     urls,
     db_path: str,
@@ -173,10 +178,9 @@ def build_answer(
     cleaned = normalize_shellish_input(query)
     index = Index(db_path)
     memory = SessionMemory(db_path)
-
+    settings = ResearchSettings()
     try:
         header = ""
-
         if use_web:
             header = (
                 "Internet mode enabled. Searching public web before answering.\n"
@@ -187,12 +191,13 @@ def build_answer(
                 limit=web_limit,
                 crawl_depth=0,
             )
-
         return header + build_conversation_answer(
             cleaned,
             index,
             memory,
             limit=limit,
+            settings=settings,
+            web_limit=web_limit,
         )
     finally:
         memory.close()
@@ -308,3 +313,28 @@ def cmd_note_search(db_path: str, query: str, limit: int) -> None:
         print(search_notes(index, query, limit=limit))
     finally:
         index.close()
+
+
+def cmd_settings_show(db_path: str) -> None:
+    """Print the current research settings panel."""
+    settings = ResearchSettings()
+    print(settings.render())
+
+
+def cmd_settings_toggle(db_path: str, key: str) -> None:
+    """Toggle one research setting by short key (web, local, notes, collections)."""
+    settings = ResearchSettings()
+    try:
+        resolved = settings.resolve_key(key)
+    except KeyError as exc:
+        print(str(exc))
+        return
+    new_value = settings.toggle(resolved)
+    label = resolved.replace("_", " ").title()
+    state = "ON" if new_value else "OFF"
+    print(f"{label}: {state}")
+    if resolved == "auto_web_research" and new_value:
+        print(
+            "BrisartAI will now automatically search the public web "
+            "when a question has no local evidence."
+        )

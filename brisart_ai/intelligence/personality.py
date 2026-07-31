@@ -6,8 +6,14 @@ without pretending it is conscious, alive, sentient, or human.
 Design rule:
     BrisartAI may speak with an analytical assistant voice.
     BrisartAI must remain grounded in indexed evidence.
-"""
 
+Every other module that produces user-facing text (synthesizer.py,
+analyzer.py, recommender.py, freeform.py, self_knowledge.py) should
+route single-fact statements through these helpers instead of
+hardcoding their own labels. That is the entire point of having a
+shared voice layer: one place decides what "Observation:", "Limit:",
+and "Suggested next move:" look like.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -62,8 +68,13 @@ def confidence_label(score: float) -> str:
     return "unknown"
 
 
-def section(title: str, lines: Iterable[str]) -> str:
-    body = [str(line).rstrip() for line in lines if str(line).strip()]
-    if not body:
-        return ""
-    return title + "\n" + "\n".join(body)
+__all__ = [
+    "VoiceProfile",
+    "DEFAULT_VOICE",
+    "opening",
+    "observation",
+    "reasoning_bullets",
+    "next_step",
+    "limitation",
+    "confidence_label",
+]

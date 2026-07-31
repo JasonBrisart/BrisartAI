@@ -1,29 +1,63 @@
-"""Source-grounded response synthesis for BrisartAI."""
+"""Source-grounded response synthesis for BrisartAI.
+
+Output philosophy: return the information, not a narration of how it was
+produced. The synthesizer extracts the most relevant sentences from the
+ranked documents and presents them directly, followed by a plain source
+list. It does not emit "Observation:", "Confidence:", "Why I think
+this:", or "Suggested next move:" scaffolding.
+
+Quantity awareness: when the question is asking for a count or measure
+("how many", "how much", "number", "population", "percent"), sentences
+that actually contain a numeric quantity are strongly boosted, so a real
+answer like "an estimated 74 million pet cats in the US" is surfaced
+ahead of generic topic sentences that merely repeat the keywords.
+"""
+
 from __future__ import annotations
 
 import collections
 import re
 from typing import Dict, Iterable, List, Set, Tuple
 
-from brisart_ai.intelligence.personality import (
-    confidence_label,
-    limitation,
-    next_step,
-    observation,
-    opening,
-    reasoning_bullets,
-)
 from brisart_ai.util import split_sentences, tokenize
 
 Document = Dict[str, object]
 Candidate = Tuple[float, int, str, Document]
 
 
+# Query words that signal the user wants a numeric answer.
+_QUANTITY_INTENT: Set[str] = {
+    "number", "amount", "population", "many", "much", "count", "total",
+    "percent", "percentage", "average", "how", "size", "figure",
+    "figures", "statistics", "stat", "stats",
+}
+
+# A bare digit anywhere in a sentence.
+_HAS_DIGIT = re.compile(r"\d")
+
+# A digit followed by a scale/unit word -- a strong signal that the
+# sentence states an actual quantity (e.g. "74 million cats",
+# "25 percent of households", "95.6 million").
+_HAS_QUANTITY = re.compile(
+    r"\d[\d,\.]*\s*"
+    r"(million|billion|thousand|percent|%|households|"
+    r"people|cats|dogs|pets|residents|adults|users|"
+    r"estimated|approximately)",
+    re.IGNORECASE,
+)
+
+
+def query_wants_quantity(query: str) -> bool:
+    """Return True when the query is asking for a count or measure."""
+    return bool(set(tokenize(query)) & _QUANTITY_INTENT)
+
+
 def sentence_score(
     sentence: str,
     query_terms: Set[str],
+    quantity_mode: bool = False,
 ) -> float:
-    """Score a sentence by query-term overlap and density."""
+    """Score a sentence by query-term overlap, density, and quantity."""
     words = tokenize(sentence)
     if not words:
         return 0.0
@@ -33,18 +67,23 @@ def sentence_score(
         for term in query_terms
     )
     density = overlap / max(1, len(words))
-    return float(overlap + density)
+    score = float(overlap + density)
+
+    # Only reward numbers when the sentence is at least somewhat on-topic
+    # (shares a query term), so we don't surface random unrelated numbers.
+    if quantity_mode and overlap > 0:
+        if _HAS_QUANTITY.search(sentence):
+            score += 10.0
+        elif _HAS_DIGIT.search(sentence):
+            score += 3.0
+
+    return score
 
 
 def _clean_sentence(sentence: str) -> str:
-    """Tidy a raw extracted sentence for readable display.
-
-    Collapses runs of whitespace, strips stray leading punctuation,
-    and normalizes spacing around basic punctuation. Does not alter
-    wording, so answers remain faithful to the source text.
-    """
+    """Tidy a raw extracted sentence for readable display."""
     text = re.sub(r"\s+", " ", sentence).strip()
-    text = text.lstrip(".,;:|-  ").strip()
+    text = text.lstrip(".,;:|- ").strip()
     text = re.sub(r"\s+([.,;:])", r"\1", text)
     return text
 
@@ -64,43 +103,7 @@ def format_source(
         or location
         or "Untitled source"
     )
-    return (
-        f"{source_type}: {title} :: {location}"
-    )
-
-
-def _source_pattern_note(
-    documents: List[Document],
-) -> str:
-    """Explain the local-versus-web evidence pattern."""
-    local_count = sum(
-        1
-        for document in documents
-        if document.get("source_type") == "file"
-    )
-    web_count = sum(
-        1
-        for document in documents
-        if document.get("source_type") == "web"
-    )
-    if local_count and web_count:
-        return (
-            "I found both local files and web-indexed "
-            "material. Local data was treated as primary "
-            "evidence and web material as supporting context."
-        )
-    if local_count:
-        return (
-            "The answer is based on local indexed files, "
-            "keeping the result tied to inspectable data "
-            "on this machine."
-        )
-    if web_count:
-        return (
-            "The answer is based on web-indexed pages "
-            "because no matching local files were retrieved."
-        )
-    return "The retrieved evidence is limited."
+    return f"{source_type}: {title} :: {location}"
 
 
 def _deduplication_key(
@@ -121,58 +124,37 @@ def synthesize(
     max_sentences: int = 10,
     recent_topics: Iterable[str] | None = None,
 ) -> str:
-    """Generate an evidence-grounded answer from ranked documents."""
+    """Return the most relevant information from ranked documents.
+
+    The output is just the answer text followed by a plain source list.
+    No reasoning narration, confidence labels, observations, or
+    suggested-next-move lines are included.
+    """
     if not docs:
-        return "\n".join(
-            [
-                (
-                    "BrisartAI: I do not have enough "
-                    "indexed information to answer that yet."
-                ),
-                limitation(
-                    "No matching local or web-indexed "
-                    "sources were retrieved."
-                ),
-                next_step(
-                    "Ingest focused local data, preview a "
-                    "scan, or enable web research when "
-                    "internet access is permitted."
-                ),
-            ]
+        return (
+            "I don't have any indexed information that answers that yet."
         )
 
-    safe_source_limit = max(
-        1,
-        int(max_sources),
-    )
-    safe_sentence_limit = max(
-        1,
-        int(max_sentences),
-    )
-
+    safe_source_limit = max(1, int(max_sources))
+    safe_sentence_limit = max(1, int(max_sentences))
     query_terms = set(tokenize(query))
-    candidates: List[Candidate] = []
+    quantity_mode = query_wants_quantity(query)
 
+    candidates: List[Candidate] = []
     for source_number, document in enumerate(
         docs[:safe_source_limit],
         start=1,
     ):
-        text = str(
-            document.get("text", "")
-        )
+        text = str(document.get("text", ""))
         for sentence in split_sentences(text):
             score = sentence_score(
                 sentence,
                 query_terms,
+                quantity_mode=quantity_mode,
             )
             if score > 0:
                 candidates.append(
-                    (
-                        score,
-                        source_number,
-                        sentence,
-                        document,
-                    )
+                    (score, source_number, sentence, document)
                 )
 
     candidates.sort(
@@ -189,139 +171,63 @@ def synthesize(
             continue
         seen.add(key)
         chosen.append(
-            (
-                score,
-                source_number,
-                sentence,
-                document,
-            )
+            (score, source_number, sentence, document)
         )
         if len(chosen) >= safe_sentence_limit:
             break
 
     if not chosen:
-        return "\n".join(
-            [
-                (
-                    "BrisartAI: I found related sources, "
-                    "but not enough sentence-level evidence "
-                    "to build a strong answer."
-                ),
-                observation(
-                    _source_pattern_note(docs)
-                ),
-                limitation(
-                    "The indexed sources matched some terms, "
-                    "but the relevant passages were weak "
-                    "or fragmented."
-                ),
-                next_step(
-                    "Try a broader question, ingest more "
-                    "focused data, or analyze the current "
-                    "index first."
-                ),
-            ]
+        return (
+            "I found related sources, but none of them contained a "
+            "passage that directly answers that."
+        )
+
+    # In quantity mode, lead with the single best sentence that actually
+    # contains a quantity, so the numeric answer is the first thing seen.
+    if quantity_mode:
+        chosen.sort(
+            key=lambda item: (
+                0 if _HAS_QUANTITY.search(item[2]) else 1,
+                -item[0],
+            )
         )
 
     # Group chosen sentences by their original source, then assign
     # sequential display numbers so citations read 1, 2, 3 with no gaps.
-    by_source: Dict[int, List[str]] = (
-        collections.defaultdict(list)
-    )
+    by_source: Dict[int, List[str]] = collections.defaultdict(list)
     original_docs: Dict[int, Document] = {}
-    best_score = 0.0
-    for (
-        score,
-        source_number,
-        sentence,
-        document,
-    ) in chosen:
+    order: List[int] = []
+    for score, source_number, sentence, document in chosen:
+        if source_number not in by_source:
+            order.append(source_number)
         by_source[source_number].append(_clean_sentence(sentence))
         original_docs[source_number] = document
-        best_score = max(best_score, score)
 
     display_number: Dict[int, int] = {}
-    for new_index, original_number in enumerate(
-        sorted(by_source),
-        start=1,
-    ):
+    for new_index, original_number in enumerate(order, start=1):
         display_number[original_number] = new_index
 
-    lines = [
-        opening(
-            "answer",
-            len(docs),
-        ),
-        observation(
-            _source_pattern_note(docs)
-        ),
-        (
-            "Confidence: "
-            f"{confidence_label(best_score)} "
-            "based on retrieved sentence overlap."
-        ),
-        "",
-        "Answer:",
-    ]
-
-    for original_number in sorted(by_source):
-        paragraph = " ".join(
-            by_source[original_number][:3]
-        )
+    lines: List[str] = []
+    for original_number in order:
+        paragraph = " ".join(by_source[original_number][:3])
         lines.append(
             f"[{display_number[original_number]}] {paragraph}"
         )
         lines.append("")
 
-    reasoning_items = [
-        (
-            f"I found {len(chosen)} relevant "
-            f"passage{'s' if len(chosen) != 1 else ''} "
-            f"across {len(by_source)} cited "
-            f"source{'s' if len(by_source) != 1 else ''}."
-        )
-    ]
-    if query_terms:
-        reasoning_items.append(
-            "The strongest matches were tied to "
-            "query terms such as: "
-            + ", ".join(
-                sorted(query_terms)[:8]
-            )
-            + "."
-        )
-    reasoning_items.append(
-        _source_pattern_note(docs)
-    )
-
-    lines.append("Why I think this:")
-    lines.extend(
-        reasoning_bullets(
-            reasoning_items
-        )
-    )
-    lines.append("")
-
     lines.append("Sources:")
-    for original_number in sorted(original_docs):
+    for original_number in order:
         lines.append(
             f"[{display_number[original_number]}] "
             f"{format_source(original_docs[original_number])}"
         )
-    lines.append("")
 
-    lines.append(
-        next_step(
-            "Ask a narrower follow-up to inspect "
-            "one theme, file, or recommendation."
-        )
-    )
-
-    return "\n".join(lines)
+    return "\n".join(lines).rstrip()
 
 
 __all__ = [
     "format_source",
+    "query_wants_quantity",
     "sentence_score",
     "synthesize",
 ]

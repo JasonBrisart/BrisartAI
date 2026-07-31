@@ -22,6 +22,8 @@ from brisart_ai.core.commands import (
     cmd_recommend,
     cmd_research_report,
     cmd_scan,
+    cmd_settings_show,
+    cmd_settings_toggle,
     cmd_status,
     cmd_timeline,
     cmd_vault,
@@ -34,13 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="BrisartAI pure-Python local research assistant"
     )
-
     parser.add_argument(
         "--db",
         default=DEFAULT_DB,
         help="SQLite database path",
     )
-
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("status", help="show index status")
@@ -103,7 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
         "ask",
         help="ask anything. BrisartAI answers from indexed data when possible",
     )
-    ask.add_argument("query", help="question or message")
+    ask.add_argument("query", help="question to ask")
     ask.add_argument(
         "--limit",
         type=int,
@@ -113,13 +113,13 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument(
         "--web",
         action="store_true",
-        help="search public web before answering",
+        help="force a public web search before answering",
     )
     ask.add_argument(
         "--web-limit",
         type=int,
-        default=3,
-        help="web results to ingest before answering",
+        default=5,
+        help="number of web pages to ingest when --web is used",
     )
 
     web = sub.add_parser(
@@ -134,6 +134,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="number of search results to ingest",
     )
     web.add_argument(
+        "--depth",
+        type=int,
+        default=0,
+        help="link crawl depth from result pages",
+    )
+
+    # "research" is the simplified, beginner-facing name for the same
+    # command as "web". Both are handled identically in main().
+    research = sub.add_parser(
+        "research",
+        help="alias of 'web': search public web and ingest result pages",
+    )
+    research.add_argument("query", help="public web search query")
+    research.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="number of search results to ingest",
+    )
+    research.add_argument(
         "--depth",
         type=int,
         default=0,
@@ -168,7 +188,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("project", help="show project awareness report")
     sub.add_parser("vault", help="show knowledge vault report")
-
     sub.add_parser(
         "vault-rebuild",
         help="rebuild simple entity index",
@@ -202,7 +221,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="manage research collections",
     )
     collection_sub = collection.add_subparsers(dest="collection_command")
-
     collection_create = collection_sub.add_parser(
         "create",
         help="create a collection",
@@ -212,12 +230,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--description",
         default="",
     )
-
     collection_sub.add_parser(
         "list",
         help="list collections",
     )
-
     collection_add = collection_sub.add_parser(
         "add",
         help="add matching sources to a collection",
@@ -227,7 +243,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     note = sub.add_parser("note", help="manage local research notes")
     note_sub = note.add_subparsers(dest="note_command")
-
     note_add = note_sub.add_parser("add", help="add a note")
     note_add.add_argument("title")
     note_add.add_argument("body")
@@ -235,20 +250,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--collection",
         default="",
     )
-
     note_list = note_sub.add_parser("list", help="list notes")
     note_list.add_argument(
         "--limit",
         type=int,
         default=20,
     )
-
     note_search = note_sub.add_parser("search", help="search notes")
     note_search.add_argument("query")
     note_search.add_argument(
         "--limit",
         type=int,
         default=10,
+    )
+
+    settings_cmd = sub.add_parser(
+        "settings",
+        help="view or toggle research source settings",
+    )
+    settings_sub = settings_cmd.add_subparsers(dest="settings_command")
+    settings_sub.add_parser("show", help="show current research settings")
+    settings_toggle = settings_sub.add_parser(
+        "toggle",
+        help="toggle a research setting",
+    )
+    settings_toggle.add_argument(
+        "key",
+        help="one of: web, local, notes, collections",
     )
 
     chat = sub.add_parser("chat", help="interactive shell")
@@ -265,7 +293,6 @@ def build_parser() -> argparse.ArgumentParser:
 def _correct_command_alias(argv):
     if not argv:
         return argv
-
     aliases = {
         "statys": "status",
         "stats": "status",
@@ -274,32 +301,25 @@ def _correct_command_alias(argv):
         "recs": "recommend",
         "char": "chat",
         "report": "research-report",
+        "import": "ingest",
     }
-
     fixed = list(argv)
-
     if fixed[0] in aliases:
         fixed[0] = aliases[fixed[0]]
-
     return fixed
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
-
     raw = list(argv) if argv is not None else None
-
     if raw is not None:
         raw = _correct_command_alias(raw)
-
     args = parser.parse_args(raw)
 
     if args.command == "status":
         cmd_status(args.db)
-
     elif args.command == "ingest":
         cmd_ingest(args.paths, args.db)
-
     elif args.command == "scan-drive":
         cmd_scan(
             args.paths,
@@ -309,13 +329,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             args.max_files,
             args.max_file_bytes,
         )
-
     elif args.command == "analyze":
         cmd_analyze(args.db, args.top_terms)
-
     elif args.command == "recommend":
         cmd_recommend(args.db, args.top_terms)
-
     elif args.command == "ask":
         cmd_ask(
             args.query,
@@ -324,15 +341,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             args.web,
             args.web_limit,
         )
-
-    elif args.command == "web":
+    elif args.command in ("web", "research"):
         cmd_web(
             args.query,
             args.db,
             args.limit,
             args.depth,
         )
-
     elif args.command == "crawl":
         cmd_crawl(
             args.urls,
@@ -342,22 +357,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             args.delay,
             args.cross_domain,
         )
-
     elif args.command == "project":
         cmd_project(args.db)
-
     elif args.command == "vault":
         cmd_vault(args.db)
-
     elif args.command == "vault-rebuild":
         cmd_vault_rebuild(args.db)
-
     elif args.command == "timeline":
         cmd_timeline(args.db, args.query, args.limit)
-
     elif args.command == "research-report":
         cmd_research_report(args.db, args.top_terms)
-
     elif args.command == "collection":
         if args.collection_command == "create":
             cmd_collection_create(
@@ -375,7 +384,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
         else:
             parser.print_help()
-
     elif args.command == "note":
         if args.note_command == "add":
             cmd_note_add(
@@ -394,11 +402,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
         else:
             parser.print_help()
-
+    elif args.command == "settings":
+        if args.settings_command == "toggle":
+            cmd_settings_toggle(args.db, args.key)
+        else:
+            cmd_settings_show(args.db)
     elif args.command == "chat":
         cmd_chat(args.db, args.limit)
-
     else:
         cmd_chat(args.db, 8)
-
     return 0
