@@ -1,221 +1,489 @@
 # BrisartAI
 
-**Pure Python. No Dependencies. Local-First. Inspectable.**
+**Pure Python. Zero Dependencies. Local-First. Inspectable.**
 
-BrisartAI is a local research assistant that transforms files, folders, notes,
-and public web research into a searchable knowledge system, accessed through
-a small Tkinter desktop app.
+BrisartAI is a local research assistant that transforms files, folders, notes, and optional public web research into a searchable knowledge system through a lightweight Tkinter desktop application.
 
-Unlike cloud-based AI systems, BrisartAI is designed to run locally, store
-data locally, and remain fully inspectable. Every component is written in
-standard Python and can be reviewed, modified, and audited.
+Every component is written with the Python standard library. BrisartAI stores its data locally, keeps retrieval behavior inspectable, and does not depend on a hidden model or third-party package ecosystem.
 
 ---
 
 ## Philosophy
 
-BrisartAI was built around a simple principle:
+BrisartAI is built around a simple principle:
 
-```text
-Your data should remain your data.
-```
+> Your data should remain your data.
 
 The project prioritizes:
 
 - Local-first operation
-- Explainable behavior
 - Source-grounded answers
+- Explainable retrieval
 - Inspectable code
 - Pure Python implementation
 - Zero third-party dependencies
 - Optional internet access
+- Air-gap friendly operation
 
-Local information is treated as the primary source of truth. Internet access
-is optional and exists only to provide additional research context when a
-question needs it.
+Local information is treated as the primary source of truth. Public web access is optional and exists only to provide additional research context when needed.
 
-## Core Workflow
+---
 
-```
-Files, Notes                Public Web
-     │                           │
-     ▼                           ▼
-        BrisartAI Desktop App
-                 │
-                 ▼
-        Local SQLite Index
-                 │
-                 ▼
-      Ranking + Synthesis
-                 │
-                 ▼
-      Source-Grounded Answer
-```
+## What BrisartAI Is
 
-## Features
+BrisartAI is not a large neural language model.
 
-### Knowledge Indexing
+It is a local information retrieval and extractive answer system:
+
+    Files, Notes, and Web Pages
+                  |
+                  v
+          Local SQLite Index
+                  |
+                  v
+       Term and Intent Ranking
+                  |
+                  v
+        Source-Grounded Answer
+
+When relevant evidence exists, BrisartAI retrieves source text, ranks the available evidence, selects useful passages, and presents an answer with citations.
+
+It does not generate unsupported facts from a hidden model.
+
+---
+
+## Core Features
+
+### Local Knowledge Indexing
 
 BrisartAI can ingest:
 
-- Local files and folders
+- Local files
+- Folders
 - Source code
-- Notes and documentation
+- Notes
+- Documentation
 - Configuration files
-- Saved / crawled web pages
+- Saved web pages
+- Crawled public web pages
 
-All indexed content is stored in a local SQLite database
-(`brisart_ai_index.sqlite3`).
+Indexed content is stored in a local SQLite database:
 
-### Ask a Question
+`brisart_ai_index.sqlite3`
 
-Type a question in the desktop chat box. By default, BrisartAI performs a
-fresh public web search for every question, crawls the relevant non-junk
-results, and answers directly inline with cited sources -- no separate
-command or toggle required. Imported files and saved notes are searched the
-exact same way.
+### Public Web Research
 
-### Source-Grounded Responses
+When public web research is enabled, BrisartAI can:
 
-When evidence exists, BrisartAI answers using indexed sources directly,
-followed by a plain source list. There is no "Confidence:" or "Observation:"
-narration -- just the answer and where it came from.
+- Search public web providers
+- Detect provider challenge and rate-limit pages
+- Reject provider batches that appear unrelated to the query
+- Crawl permitted result pages
+- Extract usable text
+- Reject known junk sources
+- Index retrieved evidence
+- Rank the results
+- Produce a cited answer
+
+The current search provider sequence includes:
+
+- DuckDuckGo HTML
+- DuckDuckGo Lite
+- Bing HTML
+- Wikipedia API fallback
+
+### Source-Grounded Answers
+
+BrisartAI answers from indexed evidence and includes a plain source list.
+
+Responses are intentionally direct:
+
+    Answer text
+
+    Sources:
+    [1] Source title
+    [2] Source title
+
+There is no personality wrapper, confidence narration, or hidden reasoning scaffold.
+
+### Intent-Aware Ranking
+
+BrisartAI evaluates both:
+
+- Whether a source matches the query terms
+- Whether the source matches the reason behind the question
+
+The shared intent layer currently recognizes:
+
+- Founder and company questions
+- Inventor and device questions
+- Statistics and population questions
+- Explanation and mechanism questions
+- General questions
+
+For example, the question:
+
+`who invented microsoft?`
+
+is treated as a founder or company-history question. Founder pages and company-history sources are favored over Microsoft product manuals, account pages, or generic invention articles.
+
+The question:
+
+`who invented the transistor?`
+
+is treated as an inventor or device-history question. Invention history, Bell Labs, and inventor-related sources are favored over unrelated pages that merely contain the word `invented`.
+
+The question:
+
+`how many cats are in america?`
+
+is treated as a statistics question. Sources containing counts, estimates, populations, percentages, and demographic figures are favored over generic cat pages.
+
+The question:
+
+`why do cats purr?`
+
+is treated as an explanation question. Sources describing causes, mechanisms, processes, and reasons are favored over generic descriptive pages.
+
+The intent system is shared by web retrieval and offline document retrieval through:
+
+`brisart_ai/intent.py`
+
+Intent is a ranking hint, not a hard filter. A source is not excluded solely because it lacks an expected intent term.
+
+### Offline Document Retrieval
+
+Imported files, saved notes, and previously indexed content use the same retrieval principles as public web sources.
+
+Offline retrieval includes:
+
+- TF-IDF-style term scoring
+- Stopword down-weighting
+- Meaningful-term coverage scoring
+- Intent-aware score adjustment
+- Source-grounded answer synthesis
+
+This keeps offline retrieval and public web retrieval aligned.
 
 ### Knowledge Vault
 
-Beyond the raw search index, BrisartAI maintains a vault layer with:
+BrisartAI includes a local vault layer supporting:
 
+- Research notes
 - Research collections
-- Local notes
 - Lightweight entity extraction
 - Topic timelines
 - Vault summary reports
 
-### Quality Filtering for Web Research
+Some vault functions remain available in source but are not fully exposed through the current desktop interface.
 
-Public web search results are filtered before they ever reach the index:
+### Search Diagnostics
 
-- Dictionary/thesaurus/definition sites are blocked outright
-  (`brisart_ai/blocklist.py`)
-- Off-topic Wikipedia disambiguation pages (e.g. `/wiki/Many`) are rejected
-- `robots.txt` is always honored
-- Local/private network destinations are always refused
+Search and crawler diagnostics are shown in the desktop transcript.
+
+Diagnostics may include:
+
+- Provider failures
+- Challenge or rate-limit detection
+- Rejected provider batches
+- Robots.txt decisions
+- Blocked sources
+- Duplicate-content skips
+- Fetch failures
+
+### Debug and Replay Tools
+
+BrisartAI includes inspectable replay tools:
+
+- `scripts/debug_search_replay.py`
+- `scripts/debug_offline_replay.py`
+
+The web replay tool can display:
+
+- Original query
+- Natural query form
+- Keyword fallback form
+- Detected intent
+- Topic terms
+- Provider activity
+- Accepted URLs
+- Intent boosts
+- Intent penalties
+- Final ranking
+
+The offline replay tool validates ranking behavior against controlled document fixtures through the real SQLite retrieval path.
+
+---
 
 ## Supported File Types
 
 ### Text and Documentation
-- .txt, .md, .markdown, .rst, .rtf, .log
+
+- `.txt`
+- `.md`
+- `.markdown`
+- `.rst`
+- `.rtf`
+- `.log`
 
 ### Data Formats
-- .csv, .tsv, .json, .jsonl, .xml, .yaml, .yml, .toml, .ini, .cfg, .conf
+
+- `.csv`
+- `.tsv`
+- `.json`
+- `.jsonl`
+- `.xml`
+- `.yaml`
+- `.yml`
+- `.toml`
+- `.ini`
+- `.cfg`
+- `.conf`
 
 ### Source Code
-- .py, .js, .ts, .jsx, .tsx, .java, .c, .cpp, .h, .cs, .go, .rs, .sh, .ps1,
-  .bat, .sql
+
+- `.py`
+- `.js`
+- `.ts`
+- `.jsx`
+- `.tsx`
+- `.java`
+- `.c`
+- `.cpp`
+- `.h`
+- `.cs`
+- `.go`
+- `.rs`
+- `.sh`
+- `.ps1`
+- `.bat`
+- `.sql`
 
 ### Web Content
-- .html, .htm, .css, .svg
 
-### Office Documents (best-effort, pure-Python extraction)
-- .docx, .pptx, .xlsx, .odt
+- `.html`
+- `.htm`
+- `.css`
+- `.svg`
 
-### PDF (best-effort, pure-Python extraction)
-- .pdf -- the objective is searchable text extraction, not perfect
-  rendering.
+### Office Documents
+
+Best-effort pure-Python extraction is available for:
+
+- `.docx`
+- `.pptx`
+- `.xlsx`
+- `.odt`
+
+### PDF
+
+Best-effort pure-Python text extraction is available for:
+
+- `.pdf`
+
+The PDF reader aims to recover searchable text. It is not intended to reproduce page layout or visual formatting.
+
+---
 
 ## Quick Start
 
-BrisartAI is GUI-only. There are no command-line subcommands.
+BrisartAI is GUI-only.
 
-```
-python brisartai.py
-```
+Run:
 
-or
+    python brisartai.py
 
-```
-start.bat
-```
+On Windows, you can also run:
 
-This launches the desktop window. From there:
+    start.bat
 
-- **Import Files** -- bring local files or a folder into the knowledge base
-- **Add Note** -- save a short note into the knowledge base
-- **Research Web** -- search the public web and answer a question
-- **Settings** -- view/toggle research sources
-- **Help** -- show in-app help text
+The desktop application provides actions for:
 
-Or just type a question directly into the chat box and press Enter.
+- Importing files and folders
+- Adding notes
+- Asking questions
+- Running public web research
+- Changing research settings
+- Viewing help
+
+You can also type a question directly into the chat box and press Enter.
+
+---
 
 ## Project Structure
 
-```
-brisart_ai/
-├── core/
-│   ├── conversation.py      conversation/answer routing
-│   ├── session_memory.py    lightweight recent-topic memory
-│   └── settings.py          persistent research settings
-├── io/
-│   ├── binary_readers.py    docx/pptx/xlsx/odt/pdf best-effort extraction
-│   ├── extractor.py         HTML text/link extraction, CSV conversion
-│   ├── input_cleaner.py     chat input normalization
-│   └── readers.py           file type dispatch + folder walking
-├── knowledge/
-│   ├── index.py             SQLite source + term index
-│   ├── ingest.py            local file ingestion
-│   ├── ranker.py            TF-IDF style retrieval + ranking
-│   ├── synthesizer.py       source-grounded answer synthesis
-│   └── vault.py             collections, notes, entities, timeline
-├── ui/
-│   ├── app.py               desktop application window
-│   ├── chat_panel.py        chat transcript + input box
-│   ├── dialogs.py           import/note/settings dialogs
-│   ├── service.py           shared backend service layer
-│   ├── sidebar.py           navigation sidebar
-│   └── theme.py             visual theme constants
-├── web/
-│   ├── crawler.py           web search + crawl + ingest pipeline
-│   ├── fetcher.py           single-URL fetch
-│   ├── models.py            FetchResult dataclass
-│   ├── policy.py            robots.txt + local/private host policy
-│   ├── search.py            DuckDuckGo / Bing HTML search providers
-│   └── stats.py             crawl run statistics
-├── blocklist.py             shared web-source blocking policy
-└── util.py                  tokenizing, hashing, URL normalization
+    brisart_ai/
+    ├── core/
+    │   ├── conversation.py      Answer routing
+    │   ├── session_memory.py    Lightweight recent-topic memory
+    │   └── settings.py          Persistent research settings
+    ├── io/
+    │   ├── binary_readers.py    Office and PDF text extraction
+    │   ├── extractor.py         HTML extraction and CSV conversion
+    │   ├── input_cleaner.py     Input normalization
+    │   └── readers.py           File dispatch and folder walking
+    ├── knowledge/
+    │   ├── index.py             SQLite source and term index
+    │   ├── ingest.py            Local file ingestion
+    │   ├── ranker.py            TF-IDF-style and intent-aware ranking
+    │   ├── synthesizer.py       Source-grounded answer synthesis
+    │   └── vault.py             Notes, collections, entities, timelines
+    ├── ui/
+    │   ├── app.py               Desktop application
+    │   ├── chat_panel.py        Transcript and input box
+    │   ├── dialogs.py           Import, note, and settings dialogs
+    │   ├── service.py           Shared backend service
+    │   ├── sidebar.py           Navigation sidebar
+    │   └── theme.py             Visual theme constants
+    ├── web/
+    │   ├── crawler.py           Search, crawl, rank, and ingest pipeline
+    │   ├── fetcher.py           Single-URL retrieval
+    │   ├── models.py            FetchResult data model
+    │   ├── policy.py            Robots.txt and private-host policy
+    │   ├── search.py            Public search providers
+    │   └── stats.py             Crawl statistics
+    ├── blocklist.py             Shared source-blocking policy
+    ├── intent.py                Query-intent detection and scoring
+    └── util.py                  Tokens, hashes, paths, and URLs
 
-data/
-└── research_settings.json   persisted research toggle state
+    data/
+    └── research_settings.json   Persisted research settings
 
-docs/
-├── file_types.md
-└── safety.md
-```
+    docs/
+    ├── file_types.md
+    └── safety.md
 
-This structure keeps subsystems isolated, inspectable, and easy to maintain.
+    scripts/
+    ├── debug_offline_replay.py  Offline retrieval fixtures
+    └── debug_search_replay.py   Live provider replay and diagnostics
 
-## Limitations
+---
 
-BrisartAI is intentionally simple. Current limitations include:
+## Pure Python Design
 
-- Not a large neural model
-- Cannot know information that has not been indexed
-- Retrieval quality depends on indexed content
-- Office and PDF parsing are best-effort
-- Internet access may be unavailable in air-gapped environments
+BrisartAI uses only the Python standard library.
+
+Major components use:
+
+- `tkinter` for the desktop interface
+- `sqlite3` for local storage
+- `urllib` for HTTP requests
+- `html.parser` for HTML parsing
+- `zipfile` and `xml.etree.ElementTree` for Office and ODT extraction
+- `re` and `zlib` for best-effort PDF extraction
+- `math` and standard Python collections for retrieval ranking
+- `threading` for responsive web research in the desktop application
+
+BrisartAI does not require:
+
+- `requests`
+- `beautifulsoup4`
+- `numpy`
+- `pandas`
+- `scikit-learn`
+- `python-docx`
+- `openpyxl`
+- `PyPDF2`
+- An embeddings framework
+- A vector database
+- A language-model runtime
+
+No dependency installation step is required.
+
+---
+
+## Current Limitations
+
+BrisartAI is intentionally narrow and inspectable.
+
+Current limitations include:
+
+- BrisartAI is not a neural language model.
+- BrisartAI cannot know information that has not been indexed or retrieved.
+- Answer quality depends on source quality.
+- Ranking cannot recover a useful page that a search provider never returned.
+- Public web search depends on provider availability and HTML behavior.
+- Web ranking still relies heavily on URL-derived text.
+- Page titles and search-result snippets are not fully incorporated into final web ranking.
+- Founder classification uses a finite list of known company terms.
+- Office and PDF extraction is best-effort.
+- Scanned image-only documents require OCR, which BrisartAI does not currently provide.
+- Internet research is unavailable in fully air-gapped environments.
+- Database startup failures are not yet presented through a friendly error dialog.
+- There is no formal automated unit-test suite yet.
+
+---
+
+## Known Issues
+
+### Individual off-topic pages can still enter the index
+
+BrisartAI blocks known junk sources and rejects provider batches that appear unrelated to the query.
+
+It does not yet perform a full positive relevance validation on every individual page before indexing. Fine-grained relevance is primarily handled during ranking.
+
+### Web ranking remains URL-heavy
+
+Intent-aware web scoring primarily evaluates URL-derived text.
+
+A strongly named URL may occasionally outrank a better page whose title or snippet contains stronger evidence.
+
+### Provider recall limits retrieval
+
+BrisartAI can improve the order of retrieved sources, but it cannot rank a source that was never returned by a provider.
+
+### Company classification is finite
+
+Questions about known companies can be treated as founder questions. Unlisted companies may fall back to inventor-style classification.
+
+### Replay checks are not a formal test suite
+
+The replay scripts provide repeatable validation for web and offline ranking, but the repository does not currently include a dedicated unit-test framework or automated CI suite.
+
+### Database startup errors remain raw
+
+If the SQLite index or session database cannot be opened because of locking, permissions, or a read-only path, BrisartAI may display a raw traceback.
+
+---
+
+## Recent Improvements
+
+### 1.0.0-beta.4
+
+- Added shared intent-aware ranking for web and offline retrieval
+- Added founder, inventor, statistic, explanation, and general intent classes
+- Added `brisart_ai/intent.py`
+- Added offline ranking replay fixtures
+- Added intent reasoning to the web replay tool
+- Fixed underscore-separated Wikipedia article scoring
+- Fixed percent-encoded URL handling during intent scoring
+- Preserved the provider-batch sanity guard from beta.3
+- Improved measured relevance for founder, inventor, and statistics queries
+
+### 1.0.0-beta.3
+
+- Moved web research onto a background thread
+- Fixed desktop freezing during long web research operations
+- Fixed the Automatic Web Research setting for typed questions
+- Surfaced search and crawler diagnostics in the desktop transcript
+- Added distinct status messages for web and offline retrieval
+
+For the complete release history, see `CHANGELOG.md`.
+
+---
 
 ## Documentation
 
-Additional documentation is available in `docs/`:
+Additional documentation is available in:
 
-```
-docs/
-├── file_types.md
-└── safety.md
-```
+- `docs/file_types.md`
+- `docs/safety.md`
+
+---
 
 ## Design Goals
 
-BrisartAI aims to be:
+BrisartAI aims to remain:
 
 - Local
 - Transparent
@@ -225,47 +493,10 @@ BrisartAI aims to be:
 - Dependency free
 - Easy to audit
 
-The project favors simplicity and inspectability over complexity and hidden
-behavior.
+The project favors clarity and inspectability over hidden complexity.
+
+---
 
 ## License
 
-See LICENSE for licensing information.
-
-### Known Issues
-
-BrisartAI is under active nightly development. This is a running list of
-known gaps and rough edges -- not blockers to using it, but things to be
-aware of before you rely on it for something important. These get worked
-down over successive patches; nothing here is a surprise to the maintainer.
-
-- **Web crawler indexes off-topic results.** The crawler currently only
-rejects pages via a blocklist (dictionary/thesaurus hosts, bare-function-
-word Wikipedia disambiguation pages). It has no positive relevance check
-at crawl time -- anything not explicitly blocked gets indexed, and
-relevance is only sorted out afterward during ranking. Expect some
-irrelevant pages to make it into the index on ambiguous queries.
-- **No automated test coverage.** The legacy test suite was removed for
-testing pre-beta behavior that no longer applies. Ranking, synthesis, and
-crawler-rejection logic are currently verified by manual testing only.
-- **No error handling around database/session startup.** If the SQLite
-index file can't be opened (locked, read-only, missing permissions),
-the app will crash with a raw traceback instead of a clean message.
-
-#### Recently Fixed (1.0.0-beta.3)
-
-- **The desktop UI no longer freezes during web research.** `ui/app.py`
-now runs the search + crawl on a background thread and marshals the
-result back onto the Tk main loop, so the window stays responsive instead
-of blocking for 30-90+ seconds. There is still no progress indicator or
-way to cancel an in-flight request.
-- **The "Automatic Web Research" settings toggle now affects typed
-questions.** Ordinary chat questions respect the toggle; the explicit
-"Research Web" sidebar action still always forces a fresh web search,
-since that's a direct request.
-- **Diagnostics are no longer console-only.** Search-provider failures,
-robots.txt rejections, and filtered results are now surfaced as system
-messages in the chat transcript, in addition to being printed to console.
-
-  robots.txt rejections, and filtered results are logged with `print()`
-  and are not surfaced anywhere in the Tkinter UI itself.
+See `LICENSE` for licensing information.
