@@ -1,5 +1,116 @@
 # Changelog
 
+## 1.0.0-beta.4
+
+Added:
+- Intent-aware ranking layer shared by both public web search and offline
+  document retrieval (`brisart_ai/intent.py`).
+- Query intent classification for:
+  - founder/company questions
+  - inventor/device questions
+  - statistics/population questions
+  - explanation/mechanism questions
+  - general questions
+- Intent debugging information exposed through replay tooling, including
+  detected intent, boosts, penalties, scores, and ranking rationale
+  (`scripts/debug_search_replay.py`).
+- `scripts/debug_offline_replay.py` for validating offline retrieval
+  behavior using standalone fixture datasets without requiring manual
+  index setup.
+- Shared intent scoring between `web/crawler.py` and
+  `knowledge/ranker.py`, preventing web and offline ranking behavior
+  from diverging over time.
+
+Fixed:
+- Search relevance no longer relies exclusively on raw keyword overlap.
+  Queries are now ranked using both term matches and question intent,
+  allowing pages that actually answer the question to outrank pages that
+  merely contain the same keywords (`web/crawler.py`,
+  `knowledge/ranker.py`).
+- Founder questions such as:
+  `who invented microsoft`
+  now prioritize founder/history/company sources above product,
+  account, and generic invention pages.
+- Inventor questions such as:
+  `who invented the transistor`
+  now prioritize inventor/history sources above unrelated pages that
+  happen to contain the word "invented".
+- Statistics questions such as:
+  `how many cats are in america`
+  now favor pages containing counts, estimates, demographics,
+  populations, and measurable figures over generic topic pages.
+- Explanation questions such as:
+  `why do cats purr`
+  now favor sources explaining causes, mechanisms, and processes rather
+  than generic descriptive pages.
+- Offline document retrieval now applies the same intent-aware ranking
+  logic used by public web search, preventing imported manuals,
+  references, and glossary content from outranking more relevant
+  evidence purely through term frequency (`knowledge/ranker.py`).
+- Fixed article-slug scoring logic that recognized hyphenated article
+  titles but ignored underscore-separated titles. This previously
+  prevented many Wikipedia history pages from receiving ranking credit
+  (`web/crawler.py`).
+- Fixed percent-encoded URL handling during ranking. URLs such as:
+  `Invented_%28album%29`
+  previously bypassed work-of-art relevance penalties and could rank
+  unexpectedly high for invention-related questions (`web/crawler.py`).
+
+Changed:
+- Retrieval ranking now evaluates why a document matches a query instead
+  of only whether it contains matching words.
+- Public web search and offline search now share a unified ranking model
+  instead of maintaining independent relevance behavior.
+- Search replay tooling now exposes ranking decisions in a transparent
+  and inspectable format for debugging and validation.
+- Ranking adjustments are deliberately bounded so intent acts as a hint
+  rather than a hard filter:
+  - web ranking uses bounded intent bonuses/penalties
+  - offline ranking uses proportional score adjustments
+  - boost accumulation is capped to prevent keyword stuffing from
+    dominating results
+
+Verification:
+- `compileall` and import-smoke validation completed successfully.
+- 23/23 intent-classification checks passed.
+- 18/18 name-shape checks passed.
+- 12/12 generic-concept checks passed.
+- Provider-batch guard introduced in beta.3 remains intact.
+- All required replay queries validated against live search providers.
+- All offline intent fixtures validated through a real SQLite index
+  using the production retrieval path.
+- Search quality improvements observed during replay validation:
+  - `who invented microsoft?`
+    - before: 2/5 relevant
+    - after: 5/5 relevant
+  - `who invented the transistor and when was it invented?`
+    - before: 2/5 relevant
+    - after: 4/5 relevant
+  - `how many cats are in america?`
+    - before: 2/5 relevant
+    - after: 3/5 relevant
+
+Known Issues carried forward from beta.3:
+- No positive relevance check at crawl time -- pages are still accepted
+  into the index unless blocked by crawler policy; relevance is
+  determined primarily during ranking (`web/crawler.py`).
+- No error handling around database/session startup -- failures opening
+  SQLite databases still surface as raw exceptions
+  (`knowledge/index.py`, `core/session_memory.py`).
+- No formal automated unit test suite -- replay validation exists, but
+  the project still lacks a dedicated automated testing framework.
+
+New Known Limitations:
+- Public web ranking still evaluates URLs only. Page titles and search
+  snippets are not yet incorporated into ranking decisions, so a
+  strongly named URL can occasionally outperform a better-titled result
+  (`web/crawler.py`).
+- Founder detection uses a finite company list. Unlisted companies may
+  fall back to inventor-style classification.
+- Ranking can improve ordering of retrieved sources, but it cannot
+  compensate for poor search-provider recall when relevant sources were
+  never returned by the search engine.
+  
 ## 1.0.0-beta.3
 
 Fixed:
