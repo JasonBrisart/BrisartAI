@@ -2,13 +2,23 @@
 
 Searches multiple public endpoints without API keys:
 
-1. DuckDuckGo HTML
-2. DuckDuckGo Lite
-3. Bing HTML
+1. DuckDuckGo HTML   (scraped)
+2. DuckDuckGo Lite   (scraped)
+3. Bing HTML         (scraped)
+4. Wikipedia API     (real JSON API, no key)
 
 Providers are attempted in order. Only organic search-result links are
 extracted; results are normalized, deduplicated, and filtered before
 being returned to the crawler.
+
+The first three providers are HTML scrapers and therefore fragile: when
+they detect automated traffic, DuckDuckGo serves an anti-bot challenge
+and Bing rate-limits or substitutes an unrelated dictionary vertical. In
+that state every scraper returns zero results and a question would
+otherwise produce no sources at all. The Wikipedia API runs last as a
+floor on quality -- it is a documented, stable, key-free endpoint that
+keeps working under exactly those conditions, at the cost of covering
+only encyclopedic topics.
 
 Dictionary/definition-site blocking uses the shared list in
 brisart_ai/blocklist.py, so search.py, crawler.py, and index.py all
@@ -20,6 +30,8 @@ from __future__ import annotations
 
 import base64
 import html
+import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -34,6 +46,8 @@ from brisart_ai.web.policy import USER_AGENT
 DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/"
 DUCKDUCKGO_LITE_URL = "https://lite.duckduckgo.com/lite/"
 BING_SEARCH_URL = "https://www.bing.com/search"
+WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
+WIKIPEDIA_ARTICLE_BASE = "https://en.wikipedia.org/wiki/"
 
 _BLOCK_MARKERS = (
     "anomaly-modal",
@@ -282,6 +296,48 @@ def _looks_blocked(raw_text: str) -> bool:
     )
 
 
+def _results_look_unrelated(
+    query: str,
+    results: Sequence[Tuple[str, str]],
+) -> bool:
+    """True when a provider's results share no vocabulary with the query.
+
+    A rate-limited scraping provider does not always answer with an
+    obvious challenge page. Bing was observed returning well-formed
+    result HTML for an entirely unrelated query: "who invented the
+    transistor" came back as airline booking pages, "invented
+    transistor" as giraffe forum threads, and another run as bubble-sort
+    tutorials. :func:`_looks_blocked` cannot see this because the markup
+    is valid and parsing succeeds, so the junk reached the index looking
+    like genuine research sources.
+
+    The signal is that not one result -- URL or displayed title --
+    contains any meaningful term from the query. A single weak match is
+    enough to pass, so this stays conservative: it is meant to catch a
+    wholesale topic swap, not to second-guess ranking. Matching allows a
+    singular stem ("cats" -> "cat") so /wiki/Cat_behavior counts as
+    related to a query about cats. Batches are only judged when there
+    are enough results for a total absence of matches to be meaningful.
+    """
+    from brisart_ai.blocklist import FUNCTION_WORDS
+
+    terms = {
+        word
+        for word in re.findall(r"[a-z0-9]+", str(query or "").casefold())
+        if len(word) > 3 and word not in FUNCTION_WORDS
+    }
+    if not terms or len(results) < 3:
+        return False
+
+    for url, title in results:
+        haystack = f"{url} {title}".casefold()
+        for term in terms:
+            stem = term.rstrip("s")
+            if term in haystack or (len(stem) >= 3 and stem in haystack):
+                return False
+    return True
+
+
 def _is_search_host(hostname: str) -> bool:
     host = str(hostname or "").casefold().strip(".")
     if host in _SEARCH_HOSTS:
@@ -472,12 +528,19 @@ def _normalize_result_url(
 
 
 def _deduplicate(
-    urls: Sequence[str],
+    results: Sequence[Tuple[str, str]],
     limit: int,
-) -> List[str]:
-    results: List[str] = []
+) -> List[Tuple[str, str]]:
+    """Deduplicate ``(url, title)`` result pairs, preserving order.
+
+    Titles ride along with each URL so provider-level relevance checks
+    can inspect the result text a provider actually displayed, not just
+    the link target. Titles are dropped again at the public boundary in
+    :func:`search_public_web`.
+    """
+    deduplicated: List[Tuple[str, str]] = []
     seen = set()
-    for url in urls:
+    for url, title in results:
         normalized = normalize_url(url)
         if not normalized:
             continue
@@ -485,17 +548,19 @@ def _deduplicate(
         if comparison_key in seen:
             continue
         seen.add(comparison_key)
-        results.append(normalized)
-        if len(results) >= limit:
+        deduplicated.append(
+            (normalized, str(title or "")),
+        )
+        if len(deduplicated) >= limit:
             break
-    return results
+    return deduplicated
 
 
 def _parse_html_results(
     raw_html: str,
     base_url: str,
     limit: int,
-) -> List[str]:
+) -> List[Tuple[str, str]]:
     parser = _ResultLinkParser()
     try:
         parser.feed(raw_html)
@@ -505,14 +570,16 @@ def _parse_html_results(
             f"WARN: could not parse search HTML: {exc}"
         )
         return []
-    candidates: List[str] = []
-    for href, _visible_text in parser.links:
+    candidates: List[Tuple[str, str]] = []
+    for href, visible_text in parser.links:
         result_url = _normalize_result_url(
             href,
             base_url,
         )
         if result_url:
-            candidates.append(result_url)
+            candidates.append(
+                (result_url, visible_text),
+            )
     return _deduplicate(
         candidates,
         limit,
@@ -522,7 +589,7 @@ def _parse_html_results(
 def _search_duckduckgo_html(
     query: str,
     limit: int,
-) -> List[str]:
+) -> List[Tuple[str, str]]:
     raw_html = _http_post(
         DUCKDUCKGO_HTML_URL,
         {
@@ -548,7 +615,7 @@ def _search_duckduckgo_html(
 def _search_duckduckgo_lite(
     query: str,
     limit: int,
-) -> List[str]:
+) -> List[Tuple[str, str]]:
     raw_html = _http_get(
         DUCKDUCKGO_LITE_URL,
         {
@@ -574,7 +641,7 @@ def _search_duckduckgo_lite(
 def _search_bing_html(
     query: str,
     limit: int,
-) -> List[str]:
+) -> List[Tuple[str, str]]:
     """Scrape Bing's plain organic HTML results page.
 
     Bing dropped its public ``format=rss`` output for organic web
@@ -603,6 +670,112 @@ def _search_bing_html(
     return _parse_html_results(
         raw_html,
         BING_SEARCH_URL,
+        limit,
+    )
+
+
+def _search_wikipedia_api(
+    query: str,
+    limit: int,
+) -> List[Tuple[str, str]]:
+    """Search Wikipedia through its documented public JSON API.
+
+    This provider exists because every HTML-scraping provider above is a
+    single anti-bot policy change away from returning nothing: DuckDuckGo
+    answers automated requests with an "Unfortunately, bots use
+    DuckDuckGo too" challenge page, and Bing rate-limits and can swap
+    organic results for an unrelated dictionary vertical. When that
+    happens to all of them at once, BrisartAI previously reported "no
+    usable results" and indexed nothing at all.
+
+    ``action=query&list=search`` is a real, stable, key-free API rather
+    than a scraped page, so it keeps working under exactly the conditions
+    that break the scrapers. It only covers encyclopedic topics, which is
+    why it runs last -- as a floor on quality, not a replacement for
+    general web search.
+
+    Wikipedia's API asks for a descriptive User-Agent identifying the
+    client, so this request deliberately uses the honest BrisartAI agent
+    instead of the browser string used for the scraping providers.
+    """
+    request_url = WIKIPEDIA_API_URL + "?" + urllib.parse.urlencode(
+        {
+            "action": "query",
+            "list": "search",
+            "srsearch": query,
+            "srlimit": str(max(1, min(int(limit), 50))),
+            "srnamespace": "0",
+            "format": "json",
+        }
+    )
+    request = urllib.request.Request(
+        request_url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.8",
+            "Connection": "close",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=REQUEST_TIMEOUT,
+        ) as response:
+            payload = json.loads(
+                _read_response(response)
+            )
+    except urllib.error.HTTPError as exc:
+        print(
+            f"WARN: Wikipedia API returned HTTP {exc.code}"
+        )
+        return []
+    except urllib.error.URLError as exc:
+        print(
+            f"WARN: Wikipedia API network error: {exc.reason}"
+        )
+        return []
+    except (ValueError, TypeError) as exc:
+        print(
+            f"WARN: Wikipedia API returned unreadable JSON: {exc}"
+        )
+        return []
+    except Exception as exc:
+        print(
+            f"WARN: Wikipedia API request failed: {exc}"
+        )
+        return []
+
+    try:
+        matches = payload["query"]["search"]
+    except (KeyError, TypeError):
+        print(
+            "WARN: Wikipedia API response contained no search results."
+        )
+        return []
+
+    candidates: List[Tuple[str, str]] = []
+    for match in matches:
+        if not isinstance(match, dict):
+            continue
+        title = str(match.get("title") or "").strip()
+        if not title:
+            continue
+        article_url = WIKIPEDIA_ARTICLE_BASE + urllib.parse.quote(
+            title.replace(" ", "_"),
+            safe="",
+        )
+        normalized = _normalize_result_url(
+            article_url,
+            WIKIPEDIA_ARTICLE_BASE,
+        )
+        if normalized:
+            candidates.append(
+                (normalized, title),
+            )
+    return _deduplicate(
+        candidates,
         limit,
     )
 
@@ -638,8 +811,15 @@ def search_public_web(
             "Bing HTML",
             _search_bing_html,
         ),
+        # Runs last: a key-free real API that still works when the
+        # scraping providers above are challenged or rate-limited, so a
+        # question returns encyclopedic sources instead of nothing.
+        (
+            "Wikipedia API",
+            _search_wikipedia_api,
+        ),
     )
-    collected: List[str] = []
+    collected: List[Tuple[str, str]] = []
     for provider_name, provider in providers:
         remaining = result_limit - len(collected)
         if remaining <= 0:
@@ -662,6 +842,14 @@ def search_public_web(
                 f"WARN: {provider_name} returned no usable results."
             )
             continue
+        if _results_look_unrelated(cleaned_query, provider_results):
+            print(
+                f"WARN: {provider_name} returned {len(provider_results)} "
+                "result(s) unrelated to the query (likely a throttled or "
+                "decoy response); discarding them and trying the next "
+                "provider."
+            )
+            continue
         print(
             f"WEB SEARCH: {provider_name} returned "
             f"{len(provider_results)} usable result(s)."
@@ -676,7 +864,9 @@ def search_public_web(
             "No usable public search results were returned by any "
             "available provider."
         )
-    return collected
+    # Titles exist only so provider-level relevance checks can inspect
+    # displayed result text; callers still receive plain URLs.
+    return [url for url, _title in collected]
 
 
 __all__ = [

@@ -40,11 +40,61 @@ BLOCKED_WEB_HOSTS = (
     "ldoceonline.com",
     "macmillandictionary.com",
     "usdictionary.com",
+    "thefreedictionary.com",
+    "freedictionary.com",
+    "definitions.uslegal.com",
     "en.wiktionary.org",
     "wiktionary.org",
     "britannica.com",
     "wordhippo.com",
     "powerthesaurus.org",
+)
+
+# Hosts that are rarely the answer to a factual research question, but
+# which search-result scraping surfaces constantly: video and social
+# platforms, vendor help desks, and shopping/adoption listings. These are
+# NOT blocked outright -- a YouTube page can legitimately be the subject
+# of a query -- they are only ranked down by score_result(). This is the
+# difference between the blocklist (never ingest) and this list (prefer
+# something better if it exists).
+LOW_VALUE_HOSTS = (
+    "youtube.com",
+    "m.youtube.com",
+    "youtu.be",
+    "support.google.com",
+    "facebook.com",
+    "instagram.com",
+    "tiktok.com",
+    "pinterest.com",
+    "x.com",
+    "twitter.com",
+    "reddit.com",
+    "quora.com",
+    "amazon.com",
+    "ebay.com",
+    "etsy.com",
+    "petfinder.com",
+    "manychat.com",
+)
+
+# Path fragments that mark a listing/search/category page rather than a
+# page of prose that answers something. Matched as case-insensitive
+# SUBSTRINGS of the path, so entries without a leading slash (e.g.
+# "-breeds") intentionally catch mid-segment forms like "/cat-breeds".
+LISTING_PATH_MARKERS = (
+    "/search", "/tag/", "/tags/", "/category/", "/categories/",
+    "/browse", "/shop", "/products", "/adoption", "/for-adoption",
+    "/breed-list", "breed-list", "-breeds", "/breeds", "/watch",
+    "/playlist", "/login", "/signup",
+    "/pricing", "/contact",
+)
+
+# Product/account landing hosts. A brand's own sign-in portal matches the
+# brand term ("microsoft" in myaccount.microsoft.com) but never answers a
+# question about the brand, so it must not outrank an article.
+ACCOUNT_HOST_PREFIXES = (
+    "myaccount.", "account.", "accounts.", "login.", "signin.",
+    "signup.", "auth.", "portal.",
 )
 
 # Bare English function/question words. Used two ways:
@@ -69,7 +119,15 @@ _WIKI_TITLE_RE = re.compile(r"/wiki/([^/#?]+)")
 
 
 def is_blocked_web_host(location: str) -> bool:
-    """Return True when a URL/location points at a blocked dictionary host."""
+    """Return True when a URL/location points at a blocked dictionary host.
+
+    ``location`` must be an absolute URL with a scheme
+    ("https://thefreedictionary.com/x"). A bare hostname
+    ("thefreedictionary.com") has no scheme, so urlsplit() exposes no
+    hostname and this returns False. Both callers pass normalized
+    absolute URLs; pass a full URL, not a host, or the check silently
+    does nothing.
+    """
     try:
         host = urllib.parse.urlsplit(str(location or "")).hostname or ""
     except ValueError:
@@ -129,6 +187,9 @@ def is_junk_web_source(
 __all__ = [
     "BLOCKED_WEB_HOSTS",
     "FUNCTION_WORDS",
+    "LOW_VALUE_HOSTS",
+    "LISTING_PATH_MARKERS",
+    "ACCOUNT_HOST_PREFIXES",
     "is_blocked_web_host",
     "is_offtopic_wiki",
     "is_junk_web_source",
