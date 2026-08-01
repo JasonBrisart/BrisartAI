@@ -30,22 +30,28 @@ sys.path.insert(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 )
 
+from brisart_ai.intent import describe_intent, detect_intent  # noqa: E402
 from brisart_ai.web.crawler import (  # noqa: E402
     _should_reject,
     _topic_terms,
     clean_search_query,
+    explain_ranking,
     rank_results,
     search_keyword_fallback,
 )
 from brisart_ai.web.search import search_public_web  # noqa: E402
 
 REGRESSION_QUERIES = (
-    "how many cats are in america",
-    "who invented the transistor",
-    "what is the population of japan",
-    "when was microsoft founded",
-    "why do cats purr",
-    "python programming language creator",
+    "who invented microsoft?",
+    "who founded microsoft?",
+    "who invented the transistor and when was it invented?",
+    "who invented the telephone?",
+    "who created linux?",
+    "who founded apple?",
+    "what is the population of japan?",
+    "how many cats are in america?",
+    "why do cats purr?",
+    "how do solar panels generate electricity?",
 )
 
 RULE = "=" * 72
@@ -66,6 +72,8 @@ def _run_one(query: str, limit: int) -> bool:
 
     topics = _topic_terms(natural) | _topic_terms(keyword)
     print(f"TOPIC TERMS    : {sorted(topics)}")
+    intent = detect_intent(query)
+    print(f"DETECTED INTENT: {describe_intent(intent, query)}")
 
     collected: List[str] = []
     for label, form in (("natural", natural), ("keyword", keyword)):
@@ -102,10 +110,33 @@ def _run_one(query: str, limit: int) -> bool:
         for url in dropped:
             print(f"  - {url}")
 
-    final = rank_results(kept, topics)[:limit]
+    final = rank_results(kept, topics, query)[:limit]
     print("FINAL RANKED   :")
     for position, url in enumerate(final, start=1):
         print(f"  {position}. {url}")
+
+    # Per-URL scoring breakdown. A ranking that cannot be inspected
+    # cannot be trusted -- this project already shipped one confidently
+    # wrong diagnosis, so every component of the score is shown.
+    print("SCORING DETAIL :")
+    print(
+        f"  {'score':>6} {'base':>5} {'intent':>6}  "
+        f"{'terms':>5}  url / reason"
+    )
+    for row in explain_ranking(kept, topics, query)[:limit]:
+        print(
+            f"  {row['score']:>+6d} {row['base_score']:>+5d} "
+            f"{row['intent_delta']:>+6d}  {row['terms_matched']:>5}  "
+            f"{row['url']}"
+        )
+        reason = []
+        if row["boosts"]:
+            reason.append("boost=" + ",".join(row["boosts"]))
+        if row["penalties"]:
+            reason.append("penalty=" + ",".join(row["penalties"]))
+        if not reason:
+            reason.append("term overlap only")
+        print(f"         reason: {'; '.join(reason)}")
     return bool(final)
 
 
