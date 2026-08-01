@@ -36,6 +36,12 @@ from brisart_ai.blocklist import (
     LOW_VALUE_HOSTS,
     is_junk_web_source,
 )
+from brisart_ai.intent import (
+    INTENT_GENERAL,
+    describe_intent,
+    detect_intent,
+    score_intent,
+)
 from brisart_ai.util import (
     normalize_url,
     same_site,
@@ -174,7 +180,11 @@ def _topic_terms(cleaned_query: str) -> Set[str]:
     }
 
 
-def score_result(url: str, topic_terms: Set[str]) -> int:
+def score_result(
+    url: str,
+    topic_terms: Set[str],
+    query: str = "",
+) -> int:
     """Heuristic relevance score for a result URL. Higher is better.
 
     Scraped result order often has little to do with how well a page
@@ -196,12 +206,31 @@ def score_result(url: str, topic_terms: Set[str]) -> int:
           name but never answers a question about it)
       -2  no topic term matched anywhere in the URL
       +2  per extra distinct topic term matched (coverage bonus)
+
+    When ``query`` is supplied, an intent adjustment from
+    :mod:`brisart_ai.intent` is added on top. Term overlap alone cannot
+    tell ``/wiki/Microsoft_PowerPoint`` from ``/wiki/History_of_Microsoft``
+    for "who invented microsoft" -- both match "microsoft" -- so the
+    intent layer supplies the missing genre signal. ``query`` is optional
+    to keep the existing two-argument callers working unchanged.
     """
-    _matched, score = _score_detail(url, topic_terms)
+    _matched, score = _score_detail(url, topic_terms, query)
     return score
 
 
-def _score_detail(url: str, topic_terms: Set[str]) -> Tuple[int, int]:
+# Weight of one intent point relative to the URL-overlap scale above,
+# where a path term match is +3. Set to 2 so genre signal can reorder
+# results that overlap comparably, yet cannot by itself lift a page that
+# matches nothing: the worst case is a 4-boost page gaining +8, still
+# below a page matching three topic terms in its path.
+INTENT_WEIGHT = 2
+
+
+def _score_detail(
+    url: str,
+    topic_terms: Set[str],
+    query: str = "",
+) -> Tuple[int, int]:
     """Return (distinct topic terms matched, heuristic score)."""
     try:
         parts = urllib.parse.urlsplit(url)
@@ -237,8 +266,16 @@ def _score_detail(url: str, topic_terms: Set[str]) -> Tuple[int, int]:
     # it let a penalized sign-in page outrank a clean unrelated homepage.
     if matched_terms > 1:
         score += 2 * (matched_terms - 1)
+    # Article-shaped slug. Both separators count: Wikipedia uses "_"
+    # ("History_of_the_transistor") while most CMS platforms use "-".
+    # Checking only "-" was a real bug -- it silently denied this bonus to
+    # every encyclopedia article, so /wiki/Field-effect_transistor scored
+    # it (hyphen in the stem) while /wiki/History_of_the_transistor did
+    # not, letting a device variant outrank the actual history page.
     if matched_terms and any(
-        "-" in seg for seg in path.split("/") if len(seg) > 8
+        ("-" in seg or "_" in seg)
+        for seg in path.split("/")
+        if len(seg) > 8
     ):
         score += 2
     if any(host.startswith(prefix) for prefix in ACCOUNT_HOST_PREFIXES):
@@ -249,16 +286,58 @@ def _score_detail(url: str, topic_terms: Set[str]) -> Tuple[int, int]:
         score -= 4
     if any(marker in path for marker in LISTING_PATH_MARKERS):
         score -= 3
+
+    # Intent adjustment. Applied to the whole URL so both the host and
+    # the slug can carry genre signal.
+    if query:
+        intent = detect_intent(query)
+        if intent != INTENT_GENERAL:
+            delta, _boosts, _penalties = score_intent(
+                _intent_text(url),
+                intent,
+                query,
+                topic_terms=topic_terms,
+            )
+            score += int(round(delta * INTENT_WEIGHT))
+
     return (matched_terms, score)
 
 
-def rank_results(urls: Sequence[str], topic_terms: Set[str]) -> List[str]:
+def _intent_text(url: str) -> str:
+    """Return a URL in a form the intent scorer can read.
+
+    Percent-encoding hides genre markers. The live replay ranked
+    ``/wiki/Invented_%28album%29`` at the top for "who invented the
+    transistor": the ``(album)`` qualifier that should have demoted it was
+    spelled ``%28album%29``, so the work-of-art check never matched and
+    the page kept full credit for "invented". Wikipedia emits either form
+    depending on the provider, so the encoded variant is not an edge case.
+
+    Underscores also become spaces, so multi-word markers such as
+    ``created_by`` are seen the same way as their prose spelling.
+    """
+    text = str(url or "")
+    try:
+        text = urllib.parse.unquote(text)
+    except (UnicodeDecodeError, ValueError):
+        # Malformed escapes are not worth failing a search over; the
+        # raw URL still carries most of the signal.
+        pass
+    return text.replace("_", " ")
+
+
+def rank_results(
+    urls: Sequence[str],
+    topic_terms: Set[str],
+    query: str = "",
+) -> List[str]:
     """De-duplicate and sort URLs best-first, preserving order on ties.
 
     Sort key is (score, original position). Multi-term coverage is folded
     into the score as a bonus rather than used as a separate leading key,
     so a heavily penalized page can never ride one matched term above a
-    cleaner result.
+    cleaner result. ``query`` is optional and enables intent-aware
+    scoring; without it the behavior is unchanged.
     """
     seen: Set[str] = set()
     unique: List[Tuple[int, int, str]] = []
@@ -267,10 +346,55 @@ def rank_results(urls: Sequence[str], topic_terms: Set[str]) -> List[str]:
         if key in seen:
             continue
         seen.add(key)
-        _matched, score = _score_detail(url, topic_terms)
+        _matched, score = _score_detail(url, topic_terms, query)
         unique.append((-score, position, url))
     unique.sort()
     return [url for _, _, url in unique]
+
+
+def explain_ranking(
+    urls: Sequence[str],
+    topic_terms: Set[str],
+    query: str = "",
+) -> List[dict]:
+    """Per-URL scoring breakdown, best-first. Used by the replay scripts.
+
+    Ranking that cannot be inspected cannot be trusted, and this project
+    already shipped one confidently wrong diagnosis. Every component of
+    the final score is reported so a bad ordering can be traced to the
+    rule that caused it.
+    """
+    intent = detect_intent(query) if query else INTENT_GENERAL
+    rows: List[dict] = []
+    seen: Set[str] = set()
+    for position, url in enumerate(urls):
+        key = normalize_url(url)
+        if key in seen:
+            continue
+        seen.add(key)
+        matched, total = _score_detail(url, topic_terms, query)
+        _base_matched, base = _score_detail(url, topic_terms, "")
+        if intent != INTENT_GENERAL:
+            delta, boosts, penalties = score_intent(
+                _intent_text(url), intent, query, topic_terms=topic_terms
+            )
+        else:
+            delta, boosts, penalties = (0.0, [], [])
+        rows.append(
+            {
+                "url": url,
+                "position": position,
+                "terms_matched": matched,
+                "base_score": base,
+                "intent": intent,
+                "intent_delta": int(round(delta * INTENT_WEIGHT)),
+                "boosts": boosts,
+                "penalties": penalties,
+                "score": total,
+            }
+        )
+    rows.sort(key=lambda row: (-row["score"], row["position"]))
+    return rows
 
 
 def _should_reject(url: str, topic_terms: Set[str]) -> bool:
@@ -431,6 +555,9 @@ def web_search_and_ingest(
     search_terms = clean_search_query(query)
     fallback_terms = search_keyword_fallback(query)
 
+    intent = detect_intent(query)
+    print(f"Detected intent: {describe_intent(intent, query)}")
+
     if search_terms != query:
         print(f"Web search terms: {search_terms!r} (from: {query!r})")
     else:
@@ -457,7 +584,7 @@ def web_search_and_ingest(
             "before crawling."
         )
 
-    filtered = rank_results(kept, topics)[:limit]
+    filtered = rank_results(kept, topics, query)[:limit]
 
     if not filtered:
         print(
@@ -482,9 +609,13 @@ def web_search_and_ingest(
 
 __all__ = [
     "DEFAULT_DELAY_SECONDS",
+    "INTENT_WEIGHT",
     "clean_search_query",
     "content_exists",
     "crawl_urls_to_index",
+    "explain_ranking",
+    "rank_results",
+    "score_result",
     "search_keyword_fallback",
     "web_search_and_ingest",
 ]
