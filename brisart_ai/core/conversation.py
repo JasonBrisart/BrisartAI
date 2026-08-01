@@ -3,15 +3,14 @@
 Order of logic:
 
 1. Clean accidental shell syntax from chat input.
-2. Answer self-knowledge questions directly.
-3. Search indexed local data.
-4. If a fresh web search is forced (``force_web=True``), or no local
+2. Search indexed local data.
+3. If a fresh web search is forced (``force_web=True``), or no local
    evidence exists and Automatic Web Research is enabled in settings,
    search the public web and re-check for evidence.
-5. If evidence exists (local or newly fetched), synthesize a sourced
+4. If evidence exists (local or newly fetched), synthesize a sourced
    answer.
-6. If no evidence exists at all, answer conversationally with a clear
-   grounding label.
+5. If no evidence exists at all, answer with a simple grounding label
+   instead of a conversational fallback.
 """
 
 from __future__ import annotations
@@ -19,12 +18,7 @@ from __future__ import annotations
 from typing import Optional
 
 from brisart_ai.core.settings import ResearchSettings
-from brisart_ai.intelligence.freeform import freeform_response
 from brisart_ai.io.input_cleaner import normalize_shellish_input
-from brisart_ai.intelligence.self_knowledge import (
-    looks_like_self_question,
-    self_response,
-)
 from brisart_ai.knowledge.ranker import search
 from brisart_ai.knowledge.synthesizer import synthesize
 from brisart_ai.web.crawler import web_search_and_ingest
@@ -39,7 +33,7 @@ def build_conversation_answer(
     web_limit: int = 5,
     force_web: bool = False,
 ) -> str:
-    """Build a source-grounded or conversational answer.
+    """Build a source-grounded answer.
 
     When ``force_web`` is True, BrisartAI always searches the public web
     for the question first, then synthesizes an answer from whatever it
@@ -54,12 +48,6 @@ def build_conversation_answer(
 
     cleaned = normalize_shellish_input(query)
     recent = memory.recent_topics(limit=4)
-
-    if looks_like_self_question(cleaned):
-        answer = self_response(cleaned, index=index, recent_topics=recent)
-        memory.add("user", cleaned)
-        memory.add("assistant", answer)
-        return answer
 
     docs = search(index, cleaned, limit=limit)
 
@@ -88,10 +76,14 @@ def build_conversation_answer(
                 "from the pages that were retrieved.\n\n"
             ) + answer
     else:
-        answer = freeform_response(cleaned, index=index, recent_topics=recent)
+        answer = (
+            "I don't have any indexed information that answers that yet. "
+            "Try importing relevant files, or ask me to research the web "
+            "for this."
+        )
         if used_web:
-            answer += (
-                "\n\nI searched the public web for this, but did not find "
+            answer = (
+                "I searched the public web for this, but did not find "
                 "pages with usable, on-topic evidence. Try rephrasing the "
                 "question with more specific terms."
             )

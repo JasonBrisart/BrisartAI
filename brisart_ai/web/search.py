@@ -9,6 +9,11 @@ Searches multiple public endpoints without API keys:
 Providers are attempted in order. Only organic search-result links are
 extracted; results are normalized, deduplicated, and filtered before
 being returned to the crawler.
+
+Dictionary/definition-site blocking uses the shared list in
+brisart_ai/blocklist.py, so search.py, crawler.py, and index.py all
+agree on which hosts to reject (previously each kept its own copy and
+they had drifted out of sync).
 """
 
 from __future__ import annotations
@@ -21,10 +26,10 @@ import urllib.request
 from html.parser import HTMLParser
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from brisart_ai.blocklist import is_blocked_web_host
 from brisart_ai.util import normalize_url
 from brisart_ai.web.fetcher import MAX_PAGE_BYTES, REQUEST_TIMEOUT
 from brisart_ai.web.policy import USER_AGENT
-
 
 DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/"
 DUCKDUCKGO_LITE_URL = "https://lite.duckduckgo.com/lite/"
@@ -64,29 +69,6 @@ _IGNORED_SCHEMES = (
     "mailto:",
     "tel:",
     "data:",
-)
-
-# Dictionary / thesaurus / definition sites. Search engines (Bing in
-# particular) inject a "definition card" for any query that contains a
-# common word -- e.g. the word "many" in "how many cats are in america"
-# -- and those card links were being scraped instead of the real
-# answers. These hosts are almost never the answer to a factual research
-# question, so their result links are dropped. Edit this tuple if you
-# ever genuinely want dictionary results back.
-_DEFINITION_HOSTS = (
-    "merriam-webster.com",
-    "dictionary.cambridge.org",
-    "dictionary.com",
-    "thesaurus.com",
-    "collinsdictionary.com",
-    "vocabulary.com",
-    "wordnik.com",
-    "yourdictionary.com",
-    "definitions.net",
-    "wordreference.com",
-    "urbandictionary.com",
-    "ldoceonline.com",
-    "macmillandictionary.com",
 )
 
 # CSS classes that mark an anchor as an *organic* search result link
@@ -135,38 +117,29 @@ class _ResultLinkParser(HTMLParser):
         for name, value in attrs:
             if name.casefold() != "class" or not value:
                 continue
-
             classes = {
                 token.casefold()
                 for token in value.split()
             }
-
             for result_class in _RESULT_LINK_CLASSES:
                 if result_class in classes:
                     return True
-
         return False
 
     def handle_starttag(self, tag, attrs) -> None:
         lowered_tag = tag.casefold()
-
         if lowered_tag in _RESULT_TITLE_TAGS:
             self._title_depth += 1
             return
-
         if lowered_tag != "a":
             return
-
         href = ""
-
         for name, value in attrs:
             if name.casefold() == "href" and value:
                 href = html.unescape(value)
                 break
-
         if not href:
             return
-
         if self._title_depth > 0 or self._class_is_result(attrs):
             self._capturing = True
             self._current_href = href
@@ -178,15 +151,12 @@ class _ResultLinkParser(HTMLParser):
 
     def handle_endtag(self, tag) -> None:
         lowered_tag = tag.casefold()
-
         if lowered_tag in _RESULT_TITLE_TAGS:
             if self._title_depth > 0:
                 self._title_depth -= 1
             return
-
         if lowered_tag != "a":
             return
-
         if self._capturing and self._current_href:
             text = " ".join(
                 part.strip()
@@ -199,7 +169,6 @@ class _ResultLinkParser(HTMLParser):
                     text,
                 )
             )
-
         self._capturing = False
         self._current_href = ""
         self._current_text = []
@@ -221,12 +190,9 @@ def _request_headers() -> Dict[str, str]:
 
 def _read_response(response) -> str:
     raw = response.read(MAX_PAGE_BYTES + 1)
-
     if len(raw) > MAX_PAGE_BYTES:
         raise ValueError("search response exceeded maximum size")
-
     charset = response.headers.get_content_charset() or "utf-8"
-
     return raw.decode(
         charset,
         errors="replace",
@@ -238,42 +204,35 @@ def _http_get(
     parameters: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     request_url = url
-
     if parameters:
         encoded = urllib.parse.urlencode(parameters)
         separator = "&" if "?" in request_url else "?"
         request_url = f"{request_url}{separator}{encoded}"
-
     request = urllib.request.Request(
         request_url,
         headers=_request_headers(),
         method="GET",
     )
-
     try:
         with urllib.request.urlopen(
             request,
             timeout=REQUEST_TIMEOUT,
         ) as response:
             return _read_response(response)
-
     except urllib.error.HTTPError as exc:
         print(
             f"WARN: search provider returned HTTP {exc.code}: "
             f"{request_url}"
         )
-
     except urllib.error.URLError as exc:
         print(
             f"WARN: search provider network error: "
             f"{exc.reason}"
         )
-
     except Exception as exc:
         print(
             f"WARN: search provider request failed: {exc}"
         )
-
     return None
 
 
@@ -282,49 +241,41 @@ def _http_post(
     parameters: Dict[str, str],
 ) -> Optional[str]:
     encoded = urllib.parse.urlencode(parameters).encode("utf-8")
-
     headers = _request_headers()
     headers["Content-Type"] = "application/x-www-form-urlencoded"
     headers["Origin"] = "https://duckduckgo.com"
     headers["Referer"] = "https://duckduckgo.com/"
-
     request = urllib.request.Request(
         url,
         data=encoded,
         headers=headers,
         method="POST",
     )
-
     try:
         with urllib.request.urlopen(
             request,
             timeout=REQUEST_TIMEOUT,
         ) as response:
             return _read_response(response)
-
     except urllib.error.HTTPError as exc:
         print(
             f"WARN: search provider returned HTTP {exc.code}: "
             f"{url}"
         )
-
     except urllib.error.URLError as exc:
         print(
             f"WARN: search provider network error: "
             f"{exc.reason}"
         )
-
     except Exception as exc:
         print(
             f"WARN: search provider request failed: {exc}"
         )
-
     return None
 
 
 def _looks_blocked(raw_text: str) -> bool:
     lowered = str(raw_text or "").casefold()
-
     return any(
         marker in lowered
         for marker in _BLOCK_MARKERS
@@ -333,25 +284,11 @@ def _looks_blocked(raw_text: str) -> bool:
 
 def _is_search_host(hostname: str) -> bool:
     host = str(hostname or "").casefold().strip(".")
-
     if host in _SEARCH_HOSTS:
         return True
-
     return any(
         host.endswith("." + search_host)
         for search_host in _SEARCH_HOSTS
-    )
-
-
-def _is_definition_host(hostname: str) -> bool:
-    host = str(hostname or "").casefold().strip(".")
-
-    if not host:
-        return False
-
-    return any(
-        host == definition_host or host.endswith("." + definition_host)
-        for definition_host in _DEFINITION_HOSTS
     )
 
 
@@ -360,7 +297,6 @@ def _remove_tracking_parameters(url: str) -> str:
         parsed = urllib.parse.urlsplit(url)
     except ValueError:
         return ""
-
     ignored_parameters = {
         "fbclid",
         "gclid",
@@ -375,23 +311,19 @@ def _remove_tracking_parameters(url: str) -> str:
         "utm_source",
         "utm_term",
     }
-
     parameters = urllib.parse.parse_qsl(
         parsed.query,
         keep_blank_values=True,
     )
-
     cleaned_parameters = [
         (name, value)
         for name, value in parameters
         if name.casefold() not in ignored_parameters
     ]
-
     cleaned_query = urllib.parse.urlencode(
         cleaned_parameters,
         doseq=True,
     )
-
     return urllib.parse.urlunsplit(
         (
             parsed.scheme,
@@ -408,33 +340,23 @@ def _decode_duckduckgo_target(url: str) -> str:
         parsed = urllib.parse.urlsplit(url)
     except ValueError:
         return ""
-
     if "duckduckgo.com" not in parsed.netloc.casefold():
         return url
-
     parameters = urllib.parse.parse_qs(
         parsed.query,
         keep_blank_values=True,
     )
-
     values = parameters.get("uddg")
-
     if not values:
         return url
-
     target = values[0]
-
     for _ in range(3):
         decoded = urllib.parse.unquote(target)
-
         if decoded == target:
             break
-
         target = decoded
-
     if target.startswith(("http://", "https://")):
         return target
-
     return url
 
 
@@ -447,47 +369,35 @@ def _decode_bing_target(url: str) -> str:
     followed by URL-safe base64 without padding. If unwrapping fails
     for any reason, the original URL is returned unchanged.
     """
-
     try:
         parsed = urllib.parse.urlsplit(url)
     except ValueError:
         return url
-
     if "bing.com" not in parsed.netloc.casefold():
         return url
-
     if not parsed.path.casefold().endswith("/ck/a"):
         return url
-
     parameters = urllib.parse.parse_qs(
         parsed.query,
         keep_blank_values=True,
     )
-
     values = parameters.get("u")
-
     if not values:
         return url
-
     encoded = values[0]
-
     if not encoded[2:]:
         return url
-
     # Bing prefixes the payload with a short encoding tag (commonly
     # "a1") before the base64url body.
     payload = encoded[2:] if len(encoded) > 2 else encoded
     padding = "=" * (-len(payload) % 4)
-
     try:
         decoded_bytes = base64.urlsafe_b64decode(payload + padding)
         decoded = decoded_bytes.decode("utf-8", errors="replace")
     except Exception:
         return url
-
     if decoded.startswith(("http://", "https://")):
         return decoded
-
     return url
 
 
@@ -501,34 +411,23 @@ def _strip_embedded_markup(text: str) -> str:
     ``href="..."`` attribute rather than treating the whole markup
     blob as a URL.
     """
-
     candidate = str(text or "").strip()
-
     if "<" not in candidate or "href" not in candidate.casefold():
         return candidate
-
     marker = "href="
     lowered = candidate.casefold()
     start = lowered.find(marker)
-
     if start == -1:
         return candidate
-
     start += len(marker)
-
     if start >= len(candidate):
         return candidate
-
     quote_char = candidate[start]
-
     if quote_char not in ("'", '"'):
         return candidate
-
     end = candidate.find(quote_char, start + 1)
-
     if end == -1:
         return candidate
-
     return candidate[start + 1:end]
 
 
@@ -539,15 +438,11 @@ def _normalize_result_url(
     candidate = html.unescape(
         _strip_embedded_markup(href)
     )
-
     if not candidate:
         return ""
-
     lowered = candidate.casefold()
-
     if lowered.startswith(_IGNORED_SCHEMES):
         return ""
-
     if candidate.startswith("//"):
         candidate = "https:" + candidate
     else:
@@ -555,32 +450,24 @@ def _normalize_result_url(
             base_url,
             candidate,
         )
-
     candidate = _decode_duckduckgo_target(candidate)
     candidate = _decode_bing_target(candidate)
     candidate = _remove_tracking_parameters(candidate)
     candidate = normalize_url(candidate)
-
     if not candidate:
         return ""
-
     try:
         parsed = urllib.parse.urlsplit(candidate)
     except ValueError:
         return ""
-
     if parsed.scheme not in {"http", "https"}:
         return ""
-
     if not parsed.hostname:
         return ""
-
     if _is_search_host(parsed.hostname):
         return ""
-
-    if _is_definition_host(parsed.hostname):
+    if is_blocked_web_host(candidate):
         return ""
-
     return candidate
 
 
@@ -590,24 +477,17 @@ def _deduplicate(
 ) -> List[str]:
     results: List[str] = []
     seen = set()
-
     for url in urls:
         normalized = normalize_url(url)
-
         if not normalized:
             continue
-
         comparison_key = normalized.rstrip("/").casefold()
-
         if comparison_key in seen:
             continue
-
         seen.add(comparison_key)
         results.append(normalized)
-
         if len(results) >= limit:
             break
-
     return results
 
 
@@ -617,7 +497,6 @@ def _parse_html_results(
     limit: int,
 ) -> List[str]:
     parser = _ResultLinkParser()
-
     try:
         parser.feed(raw_html)
         parser.close()
@@ -626,25 +505,18 @@ def _parse_html_results(
             f"WARN: could not parse search HTML: {exc}"
         )
         return []
-
     candidates: List[str] = []
-
     for href, _visible_text in parser.links:
         result_url = _normalize_result_url(
             href,
             base_url,
         )
-
         if result_url:
             candidates.append(result_url)
-
     return _deduplicate(
         candidates,
         limit,
     )
-
-
-
 
 
 def _search_duckduckgo_html(
@@ -658,17 +530,14 @@ def _search_duckduckgo_html(
             "kl": "us-en",
         },
     )
-
     if not raw_html:
         return []
-
     if _looks_blocked(raw_html):
         print(
             "WARN: DuckDuckGo HTML returned a challenge or "
             "rate-limit page."
         )
         return []
-
     return _parse_html_results(
         raw_html,
         DUCKDUCKGO_HTML_URL,
@@ -687,17 +556,14 @@ def _search_duckduckgo_lite(
             "kl": "us-en",
         },
     )
-
     if not raw_html:
         return []
-
     if _looks_blocked(raw_html):
         print(
             "WARN: DuckDuckGo Lite returned a challenge or "
             "rate-limit page."
         )
         return []
-
     return _parse_html_results(
         raw_html,
         DUCKDUCKGO_LITE_URL,
@@ -718,7 +584,6 @@ def _search_bing_html(
     -- the same technique used for the DuckDuckGo providers above --
     is the reliable, dependency-free option instead.
     """
-
     raw_html = _http_get(
         BING_SEARCH_URL,
         {
@@ -728,16 +593,13 @@ def _search_bing_html(
             "mkt": "en-US",
         },
     )
-
     if not raw_html:
         return []
-
     if _looks_blocked(raw_html):
         print(
             "WARN: Bing returned a challenge or rate-limit page."
         )
         return []
-
     return _parse_html_results(
         raw_html,
         BING_SEARCH_URL,
@@ -750,15 +612,12 @@ def search_public_web(
     limit: int = 5,
 ) -> List[str]:
     """Search public providers and return normalized result URLs."""
-
     cleaned_query = " ".join(
         str(query or "").split()
     )
-
     if not cleaned_query:
         print("WARN: public web search received an empty query.")
         return []
-
     try:
         result_limit = max(
             1,
@@ -766,7 +625,6 @@ def search_public_web(
         )
     except (TypeError, ValueError):
         result_limit = 5
-
     providers = (
         (
             "DuckDuckGo HTML",
@@ -781,19 +639,14 @@ def search_public_web(
             _search_bing_html,
         ),
     )
-
     collected: List[str] = []
-
     for provider_name, provider in providers:
         remaining = result_limit - len(collected)
-
         if remaining <= 0:
             break
-
         print(
             f"WEB SEARCH: trying {provider_name}"
         )
-
         try:
             provider_results = provider(
                 cleaned_query,
@@ -804,30 +657,25 @@ def search_public_web(
                 f"WARN: {provider_name} search failed: {exc}"
             )
             continue
-
         if not provider_results:
             print(
                 f"WARN: {provider_name} returned no usable results."
             )
             continue
-
         print(
             f"WEB SEARCH: {provider_name} returned "
             f"{len(provider_results)} usable result(s)."
         )
-
         collected.extend(provider_results)
         collected = _deduplicate(
             collected,
             result_limit,
         )
-
     if not collected:
         print(
             "No usable public search results were returned by any "
             "available provider."
         )
-
     return collected
 
 

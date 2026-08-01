@@ -1,14 +1,14 @@
 """BrisartAI desktop application (introduced in 1.0.0-beta.1).
 
-Pure Python / Tkinter standard library only. This is the default entry
-point for BrisartAI; the terminal chat mode from earlier alpha
-releases still exists and can be reached with `python brisartai.py --cli`.
+Pure Python / Tkinter standard library only. This is the only entry
+point for BrisartAI; the terminal chat/CLI mode from earlier alpha
+releases has been removed.
 """
 
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import ttk
 
 from brisart_ai import APP_NAME, __version__
 from brisart_ai.knowledge.index import DEFAULT_DB
@@ -22,18 +22,15 @@ HELP_TEXT = """BrisartAI Help
 --------------
 Core actions (left sidebar):
   Import Files    bring local files or a folder into the knowledge base
-  Add Note        save a research note
+  Add Note        save a short note into the knowledge base
   Research Web    search the public web and answer a question
   Settings        view/toggle research sources
   Help            show this message
 
-Knowledge actions:
-  Vault Report, Collections, Notes, Analyze, Recommend,
-  Project Report, Research Report
-
 Just type a question in the chat box below and press Enter.
-BrisartAI searches the public web for your question, indexes the pages
-it finds, and answers you right here in this window."""
+Notes and imported files are searched the same way web results are --
+ask a question and BrisartAI will pull from anything relevant it has
+indexed, including your notes."""
 
 
 class BrisartApp(tk.Tk):
@@ -72,13 +69,6 @@ class BrisartApp(tk.Tk):
             "research": self._action_research,
             "settings": self._action_settings,
             "help": self._action_help,
-            "vault": self._action_vault,
-            "collections": self._action_collections,
-            "notes": self._action_notes,
-            "analyze": self._action_analyze,
-            "recommend": self._action_recommend,
-            "project": self._action_project,
-            "research_report": self._action_research_report,
         }
         self.sidebar = Sidebar(self, actions)
         self.sidebar.pack(side="left", fill="y")
@@ -139,15 +129,12 @@ class BrisartApp(tk.Tk):
         self._refresh_status()
 
     def _action_note(self) -> None:
-        result = ask_note(self)
-        if not result:
-            return
-        title, body = result
+        title, body = ask_note(self)
         if not body:
-            messagebox.showinfo(APP_NAME, "Note body cannot be empty.")
             return
-        message = self.service.add_note(title, body)
-        self.chat.append_system(message)
+        result = self.service.add_note(title, body)
+        self.chat.append_system(result)
+        self._refresh_status()
 
     def _action_research(self) -> None:
         query = ask_text(self, "Research the Web", "What do you want to know?")
@@ -161,27 +148,6 @@ class BrisartApp(tk.Tk):
 
     def _action_help(self) -> None:
         self.chat.append_system(HELP_TEXT)
-
-    def _action_vault(self) -> None:
-        self.chat.append_system(self.service.vault_report())
-
-    def _action_collections(self) -> None:
-        self.chat.append_system(self.service.list_collections())
-
-    def _action_notes(self) -> None:
-        self.chat.append_system(self.service.list_notes())
-
-    def _action_analyze(self) -> None:
-        self.chat.append_system(self.service.analyze())
-
-    def _action_recommend(self) -> None:
-        self.chat.append_system(self.service.recommend())
-
-    def _action_project(self) -> None:
-        self.chat.append_system(self.service.project_report())
-
-    def _action_research_report(self) -> None:
-        self.chat.append_system(self.service.research_report())
 
     # -- lifecycle --------------------------------------------------------
     def _on_close(self) -> None:

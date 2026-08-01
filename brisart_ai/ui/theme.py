@@ -1,9 +1,8 @@
 """Visual theme constants for the BrisartAI desktop UI.
 
-Centralizing colors and fonts here means every widget in ui/ pulls
-from the same palette instead of hardcoding values, the same
-single-source-of-truth pattern intelligence/personality.py already
-uses for text voice.
+Centralizing colors and fonts here means every widget in ui/ pulls from
+the same palette instead of hardcoding values, so the look can be
+changed in one place.
 """
 from __future__ import annotations
 

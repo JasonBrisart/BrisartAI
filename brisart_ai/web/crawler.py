@@ -11,13 +11,15 @@ Three layers keep junk out of your answers:
    america" becomes the search "cats america number" -- the "many" is
    removed (so no dictionary card) and "number" is added (so results
    lean toward quantities/populations instead of random cat facts).
-
 2. OFF-TOPIC WIKI REJECTION: a Wikipedia page whose title is itself a
    bare function word (e.g. /wiki/Many, the disambiguation page for the
    word "many") is rejected -- it is about the word, not your topic.
-
 3. HOST BLOCKING: known dictionary/thesaurus/definition sites are
    refused at ingest time as a final safety net.
+
+The blocklist, function-word list, and junk-detection helpers live in
+brisart_ai/blocklist.py so search.py, crawler.py, and index.py all share
+one definition instead of each keeping their own copy.
 """
 
 from __future__ import annotations
@@ -25,9 +27,9 @@ from __future__ import annotations
 import queue
 import re
 import time
-import urllib.parse
 from typing import List, Sequence, Set, Tuple
 
+from brisart_ai.blocklist import FUNCTION_WORDS, is_junk_web_source
 from brisart_ai.util import (
     normalize_url,
     same_site,
@@ -39,7 +41,6 @@ from brisart_ai.web.policy import RobotsCache
 from brisart_ai.web.stats import CrawlStats
 
 DEFAULT_DELAY_SECONDS = 1.0
-
 
 # Question-intent phrases mapped to a helpful search keyword. When the
 # phrase appears in the question, the keyword is appended to the search
@@ -56,50 +57,7 @@ _INTENT_HINTS: Tuple[Tuple[Tuple[str, ...], str], ...] = (
     (("population", "of"), "population"),
 )
 
-
-# Filler / question / function words stripped from a query BEFORE it is
-# sent to a public search engine. Removing trigger words (especially
-# "many", "much", "definition") stops search engines from serving a
-# dictionary "definition card" instead of real results. Topic words
-# ("cats", "america", "population") are kept.
-_QUERY_NOISE: Set[str] = {
-    "a", "about", "an", "and", "are", "as", "at", "be", "by", "can",
-    "could", "did", "do", "does", "find", "for", "from", "get", "give",
-    "how", "i", "in", "into", "is", "it", "its", "know", "list", "many",
-    "me", "much", "need", "of", "on", "or", "over", "please", "s",
-    "should", "show", "some", "tell", "that", "the", "their", "them",
-    "then", "there", "these", "they", "this", "those", "to", "under",
-    "us", "want", "was", "we", "were", "what", "whats", "when", "where",
-    "which", "who", "whom", "why", "will", "with", "would", "you",
-    "your",
-}
-
 _QUERY_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-']*")
-_WIKI_TITLE = re.compile(r"/wiki/([^/#?]+)")
-
-
-# Dictionary / thesaurus / definition sites, refused at ingest time.
-_BLOCKED_HOSTS = (
-    "merriam-webster.com",
-    "dictionary.cambridge.org",
-    "dictionary.com",
-    "thesaurus.com",
-    "collinsdictionary.com",
-    "vocabulary.com",
-    "wordnik.com",
-    "yourdictionary.com",
-    "definitions.net",
-    "wordreference.com",
-    "urbandictionary.com",
-    "ldoceonline.com",
-    "macmillandictionary.com",
-    "usdictionary.com",
-    "en.wiktionary.org",
-    "wiktionary.org",
-    "britannica.com",
-    "wordhippo.com",
-    "powerthesaurus.org",
-)
 
 
 def clean_search_query(query: str) -> str:
@@ -123,7 +81,7 @@ def clean_search_query(query: str) -> str:
     kept = [
         token
         for token in tokens
-        if token.casefold() not in _QUERY_NOISE
+        if token.casefold() not in FUNCTION_WORDS
     ]
 
     kept_lower = {token.casefold() for token in kept}
@@ -147,53 +105,9 @@ def _topic_terms(cleaned_query: str) -> Set[str]:
     }
 
 
-def _host_is_blocked(url: str) -> bool:
-    """Return True when a URL points at a blocked definition host."""
-    try:
-        host = urllib.parse.urlsplit(url).hostname or ""
-    except ValueError:
-        return False
-    host = host.casefold().strip(".")
-    if not host:
-        return False
-    return any(
-        host == blocked or host.endswith("." + blocked)
-        for blocked in _BLOCKED_HOSTS
-    )
-
-
-def _is_offtopic_wiki(url: str, topic_terms: Set[str]) -> bool:
-    """Reject a Wikipedia page that is about a bare function word.
-
-    A page like /wiki/Many is the disambiguation entry for the WORD
-    "many" -- it is never the answer to a question about cats. Such a
-    page is rejected unless that word is genuinely part of the topic.
-    """
-    try:
-        parsed = urllib.parse.urlsplit(url)
-    except ValueError:
-        return False
-    if "wikipedia.org" not in (parsed.hostname or "").casefold():
-        return False
-    match = _WIKI_TITLE.search(parsed.path)
-    if not match:
-        return False
-    title = (
-        urllib.parse.unquote(match.group(1))
-        .replace("_", " ")
-        .strip()
-        .casefold()
-    )
-    return title in _QUERY_NOISE and title not in topic_terms
-
-
 def _should_reject(url: str, topic_terms: Set[str]) -> bool:
     """Combined ingest-time relevance/junk check for a URL."""
-    if _host_is_blocked(url):
-        return True
-    if _is_offtopic_wiki(url, topic_terms):
-        return True
-    return False
+    return is_junk_web_source(url, topic_terms)
 
 
 def content_exists(

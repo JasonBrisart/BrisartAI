@@ -1,5 +1,94 @@
 # Changelog
 
+## 1.0.0-beta.2
+
+Removed:
+- `knowledge/project_memory.py`, `knowledge/relationship_graph.py`, and
+  `knowledge/memory_report.py` -- persistent project memory and relationship
+  graph tracking added in beta.1 have been stripped out.
+- `knowledge/analyzer.py`, `knowledge/project_awareness.py`, and
+  `knowledge/source_attribution.py` -- project analysis and source
+  attribution reporting removed along with the memory/relationship layer
+  they supported.
+- `core/cli.py`, `core/chat.py`, `core/commands.py`, `core/assistant.py` --
+  the entire terminal CLI/chat stack has been fully removed. BrisartAI is
+  now GUI-only; `brisartai.py` takes no arguments and always launches the
+  desktop app.
+- `core/conversation_memory.py`, `core/intent_detector.py`,
+  `core/response_builder.py`, `core/state_manager.py` -- supporting modules
+  for the removed CLI/chat stack.
+- The personality/freeform/self-knowledge conversational layer
+  (`personality.py`, `freeform.py`, `self_knowledge.py`) -- the
+  Observation/Confidence/Why-I-think-this narration voice these modules
+  produced is gone; `knowledge/synthesizer.py` now returns the extracted
+  answer and a plain source list directly.
+- `data/project_memory.json`, `data/relationship_graph.json` storage files
+  (no longer written).
+- `--gui` / `--cli` startup flags (there is only one mode now).
+- All `/vault`, `/collection`, `/timeline`, `/crawl`, `/scan-preview` chat
+  slash-commands and the `settings show` / `settings toggle KEY` CLI
+  subcommands, since the terminal interface that hosted them is gone.
+  The underlying `knowledge/vault.py` functions (`add_note`, `list_notes`,
+  `search_notes`, collections, entity extraction, timeline) still exist
+  in source and are available to call directly, but are not currently
+  wired into the desktop UI.
+- The legacy `tests/` folder. It was already noted as removed in beta.1's
+  Fixed section for being tied to the pre-beta answer format; the folder
+  itself has now been deleted rather than left in place.
+
+Fixed:
+- `README.md` no longer describes the `intelligence/`, `scanning/`, and
+  `recommendations/` packages, which never existed in this repository's
+  actual source tree, or reference `docs/architecture.md`,
+  `docs/commands.md`, `docs/drive_scanning.md`, `docs/personality.md`,
+  none of which exist. Only `docs/file_types.md` and `docs/safety.md` are
+  real.
+- `README.md` Quick Start section no longer documents the removed
+  `status` / `ingest` / `analyze` / `recommend` / `ask` CLI subcommands.
+  `brisartai.py` has no CLI surface -- it launches the GUI unconditionally.
+- Full audit of every `from brisart_ai...import` across all remaining
+  Python files confirmed zero dead imports and zero references to deleted
+  modules; the only stale references found were in documentation
+  (README.md, CHANGELOG.md) and orphaned `__pycache__` bytecode for the
+  modules removed above.
+
+Note: the beta.1 entry below is left as written for historical accuracy
+(it describes what beta.1 actually shipped with at the time), but a large
+share of those features were removed in later stripping sessions before a
+1.0.0-beta.2 tag was ever cut. This entry documents that removal so the
+changelog stays truthful about what currently exists in source.
+
+Current Subsystem Layout (post-beta.2):
+```
+core/
+├── conversation.py
+├── session_memory.py
+└── settings.py
+
+knowledge/
+├── index.py
+├── ingest.py
+├── ranker.py
+├── synthesizer.py
+└── vault.py
+
+ui/
+├── app.py
+├── chat_panel.py
+├── dialogs.py
+├── service.py
+├── sidebar.py
+└── theme.py
+
+web/
+├── crawler.py
+├── fetcher.py
+├── models.py
+├── policy.py
+├── search.py
+└── stats.py
+```
+
 ## 1.0.0-beta.1
 
 Added:
@@ -114,6 +203,7 @@ ui/
 ```
 
 ## 0.9.0-alpha
+
 Added:
 - Crawl statistics reporting for web ingestion operations
 - Duplicate-content detection before indexing crawled pages
@@ -140,6 +230,7 @@ web/
 ```
 
 ## 0.8.0-alpha
+
 Added:
 - Split the command-line interface into focused modules: commands.py (command handlers), chat.py (interactive shell), and cli.py (argument parser and entry point)
 - _clean_sentence() helper in synthesizer.py for readable answer formatting
@@ -151,9 +242,10 @@ Changed:
 Fixed:
 - Citation numbering is now sequential with no gaps (previously skipped numbers when duplicate passages were removed)
 - Removed the noisy tokenized "Context I still have in view" line from answers
-- Import and use __version__ from the brisart_ai package instead of hardcoding the version string. This ensures the USER_AGENT always reflects the actual package version.
+- Import and use `__version__` from the brisart_ai package instead of hardcoding the version string. This ensures the USER_AGENT always reflects the actual package version.
 
 ## 0.7.0-alpha
+
 Added:
 - Knowledge Vault layer built on the existing SQLite index
 - Research collections for grouping indexed sources
@@ -167,6 +259,7 @@ Fixed:
 - Aligned package version number with the actual release
 
 ## 0.6.0-alpha
+
 Fixed:
 - Running `py brisartai.py` now starts interactive chat instead of showing help.
 - Chat mode now accepts normal human input without requiring `py brisartai.py ask`.
@@ -182,6 +275,7 @@ Added:
 - `start.bat`
 
 ## 0.5.0-alpha
+
 Added:
 - Free-form response mode for any typed input
 - Clear distinction between indexed-file answers and general fallback responses
@@ -191,6 +285,7 @@ Added:
 - General assistant fallback that explains limits instead of going silent
 
 ## 0.4.0-alpha
+
 Added:
 - Assistant voice/personality layer
 - Logical observations in answers
@@ -201,6 +296,7 @@ Added:
 - More natural analysis and recommendation output
 
 ## 0.3.0-alpha
+
 Added:
 - Conservative drive/folder scanning
 - Scan preview mode
@@ -211,7 +307,9 @@ Added:
 - Project hygiene recommendations based on indexed filenames
 
 ## 0.2.0-alpha
+
 Shifted BrisartAI from crawler-first to data-first architecture.
 
 ## 0.1.0-alpha
+
 Initial crawler/index/retrieval prototype.

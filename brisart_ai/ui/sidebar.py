@@ -1,4 +1,5 @@
-"""Sidebar with the five core actions plus a live status readout."""
+"""Sidebar with the core actions plus a live status readout."""
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -55,30 +56,6 @@ class Sidebar(ttk.Frame):
             ("Help", "help"),
         ):
             self._make_button(label, key)
-
-        ttk.Separator(self, orient="horizontal").pack(
-            fill="x", padx=theme.PAD, pady=theme.PAD
-        )
-
-        advanced_label = tk.Label(
-            self,
-            text="KNOWLEDGE",
-            bg=theme.BG_SIDEBAR,
-            fg=theme.FG_MUTED,
-            font=("Segoe UI", 8, "bold"),
-        )
-        advanced_label.pack(anchor="w", padx=theme.PAD, pady=(0, theme.PAD_SMALL))
-
-        for label, key in (
-            ("Vault Report", "vault"),
-            ("Collections", "collections"),
-            ("Notes", "notes"),
-            ("Analyze", "analyze"),
-            ("Recommend", "recommend"),
-            ("Project Report", "project"),
-            ("Research Report", "research_report"),
-        ):
-            self._make_button(label, key, small=True)
 
         self.status_var = tk.StringVar(value="Indexed: 0 (0 local, 0 web)")
         status = tk.Label(

@@ -3,109 +3,20 @@
 from __future__ import annotations
 
 import collections
-import re
 import sqlite3
-import urllib.parse
 from pathlib import Path
 from typing import Optional
 
+from brisart_ai.blocklist import is_junk_web_source
 from brisart_ai.util import now_ts, stable_hash, tokenize
 
 
 # Anchor the database to the project root (the folder that contains the
 # brisart_ai package) so it is always created in the same, easy-to-find
 # place -- right next to brisartai.py -- no matter which directory you
-# launch BrisartAI from. Previously this was a bare relative filename, so
-# the database was silently created in the terminal's current working
-# directory (e.g. VS Code's install folder), which is exactly why it
-# looked like it "did not exist" in the project folder and why stale rows
-# kept surviving deletions.
+# launch BrisartAI from.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = str(_PROJECT_ROOT / "brisart_ai_index.sqlite3")
-
-
-# Dictionary / thesaurus / definition sites. Web sources from these hosts
-# are almost never the answer to a factual research question. Any such
-# rows left over in an existing database from earlier runs are purged
-# automatically on startup by ``purge_junk_web_sources()``.
-_BLOCKED_WEB_HOSTS = (
-    "merriam-webster.com",
-    "dictionary.cambridge.org",
-    "dictionary.com",
-    "thesaurus.com",
-    "collinsdictionary.com",
-    "vocabulary.com",
-    "wordnik.com",
-    "yourdictionary.com",
-    "definitions.net",
-    "wordreference.com",
-    "urbandictionary.com",
-    "ldoceonline.com",
-    "macmillandictionary.com",
-    "usdictionary.com",
-    "en.wiktionary.org",
-    "wiktionary.org",
-    "britannica.com",
-    "wordhippo.com",
-    "powerthesaurus.org",
-)
-
-
-# Bare function / question words. A Wikipedia page whose title is exactly
-# one of these (e.g. /wiki/Many) is a disambiguation page about the WORD,
-# not a topic answer, and is purged from the index on startup.
-_FUNCTION_WORDS = {
-    "a", "about", "an", "and", "are", "as", "at", "be", "by", "can",
-    "could", "did", "do", "does", "for", "from", "get", "give", "how",
-    "i", "in", "into", "is", "it", "its", "list", "many", "me", "much",
-    "of", "on", "or", "over", "please", "should", "show", "some", "tell",
-    "that", "the", "their", "them", "then", "there", "these", "they",
-    "this", "those", "to", "under", "us", "want", "was", "we", "were",
-    "what", "when", "where", "which", "who", "whom", "why", "will",
-    "with", "would", "you", "your",
-}
-
-_WIKI_TITLE = re.compile(r"/wiki/([^/#?]+)")
-
-
-def _host_is_blocked(location: str) -> bool:
-    """Return True when an indexed web location is a blocked host."""
-    try:
-        host = urllib.parse.urlsplit(str(location or "")).hostname or ""
-    except ValueError:
-        return False
-    host = host.casefold().strip(".")
-    if not host:
-        return False
-    return any(
-        host == blocked or host.endswith("." + blocked)
-        for blocked in _BLOCKED_WEB_HOSTS
-    )
-
-
-def _is_offtopic_wiki(location: str) -> bool:
-    """Return True for a Wikipedia page about a bare function word."""
-    try:
-        parsed = urllib.parse.urlsplit(str(location or ""))
-    except ValueError:
-        return False
-    if "wikipedia.org" not in (parsed.hostname or "").casefold():
-        return False
-    match = _WIKI_TITLE.search(parsed.path)
-    if not match:
-        return False
-    title = (
-        urllib.parse.unquote(match.group(1))
-        .replace("_", " ")
-        .strip()
-        .casefold()
-    )
-    return title in _FUNCTION_WORDS
-
-
-def _is_junk_web_source(location: str) -> bool:
-    """Combined check: blocked dictionary host or off-topic wiki page."""
-    return _host_is_blocked(location) or _is_offtopic_wiki(location)
 
 
 class Index:
@@ -166,16 +77,8 @@ class Index:
         self.conn.commit()
 
     def purge_junk_web_sources(self) -> int:
-        """Delete stale dictionary and off-topic web rows from the index.
-
-        Older BrisartAI builds indexed dictionary "definition card" pages
-        (e.g. results for the word "many") and Wikipedia disambiguation
-        pages for bare words (e.g. /wiki/Many) before those were filtered.
-        Those rows persist in the SQLite file across restarts and can
-        still surface in answers. This removes them -- and their term rows
-        -- so old junk cannot resurface, without touching local files or
-        legitimate web pages. Returns the number of rows removed.
-        """
+        """Delete stale dictionary and off-topic web rows from the index."""
+        
         try:
             rows = self.conn.execute(
                 """
@@ -190,7 +93,7 @@ class Index:
         doomed = [
             int(source_id)
             for source_id, location in rows
-            if _is_junk_web_source(location)
+            if is_junk_web_source(location)
         ]
 
         if not doomed:

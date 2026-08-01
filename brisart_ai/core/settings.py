@@ -1,37 +1,32 @@
 """Persistent research settings for BrisartAI.
 
-This gives BrisartAI a small set of user-facing toggles so people are
-not required to memorize slash commands for common behavior. Right
-now the setting that actually changes routing behavior is
-``auto_web_research`` (see ``core/conversation.py``). The remaining
-toggles are tracked here too so the settings panel is forward
-compatible, but are honestly labeled below.
+This gives BrisartAI a small set of user-facing toggles so behavior can
+be changed from the Settings dialog without editing code. Right now the
+setting that actually changes routing behavior is ``auto_web_research``
+(see ``core/conversation.py``). The remaining toggles are tracked here
+too so the settings panel is forward compatible, but are honestly
+labeled below.
 
 Pure Python. No dependencies.
 """
 from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Dict
-
 DEFAULT_SETTINGS_PATH = Path("data/research_settings.json")
-
 DEFAULT_SETTINGS: Dict[str, bool] = {
     "search_local_files": True,
     "search_notes": True,
     "search_collections": True,
     "auto_web_research": False,
 }
-
 TOGGLE_LABELS = {
     "search_local_files": "Local Files",
     "search_notes": "Research Notes",
     "search_collections": "Research Collections",
     "auto_web_research": "Automatic Web Research",
 }
-
-# Accepted short keys for /settings toggle <key> in chat and CLI.
+# Accepted short keys for toggling a setting by name.
 SETTING_ALIASES = {
     "web": "auto_web_research",
     "auto-web": "auto_web_research",
@@ -45,21 +40,16 @@ SETTING_ALIASES = {
     "collections": "search_collections",
     "search_collections": "search_collections",
 }
-
-
 class ResearchSettings:
     """Loads, saves, and applies BrisartAI research toggles.
 
-    Backed by a small JSON file so settings persist across restarts,
-    the same way project_memory.json and relationship_graph.json do.
+    Backed by a small JSON file so settings persist across restarts.
     """
-
     def __init__(self, path: Path = DEFAULT_SETTINGS_PATH):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.values: Dict[str, bool] = dict(DEFAULT_SETTINGS)
         self.load()
-
     def load(self) -> None:
         """Load settings from disk, creating defaults if missing."""
         if not self.path.exists():
@@ -72,31 +62,26 @@ class ResearchSettings:
         for key in DEFAULT_SETTINGS:
             if key in data and isinstance(data[key], bool):
                 self.values[key] = data[key]
-
     def save(self) -> None:
         """Persist current settings to disk."""
         self.path.write_text(
             json.dumps(self.values, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-
     def get(self, key: str) -> bool:
         """Return the current value of a setting."""
         return bool(self.values.get(key, False))
-
     def set(self, key: str, value: bool) -> None:
         """Set and persist a setting value."""
         if key not in DEFAULT_SETTINGS:
             raise KeyError(f"Unknown setting: {key}")
         self.values[key] = bool(value)
         self.save()
-
     def toggle(self, key: str) -> bool:
         """Flip a setting and persist the new value. Returns new value."""
         new_value = not self.get(key)
         self.set(key, new_value)
         return new_value
-
     def resolve_key(self, raw_key: str) -> str:
         """Resolve a user-typed key (e.g. 'web') to its canonical name."""
         cleaned = str(raw_key or "").strip().lower()
@@ -107,7 +92,6 @@ class ResearchSettings:
                 "Try: web, local, notes, collections"
             )
         return resolved
-
     def render(self) -> str:
         """Return a human-readable settings panel."""
         lines = ["Research Sources", ""]
@@ -124,8 +108,8 @@ class ResearchSettings:
         else:
             lines.append(
                 "Automatic Web Research is OFF. BrisartAI will only "
-                "use local indexed evidence unless you run "
-                "/research QUERY manually."
+                "use local indexed evidence unless you turn it on or "
+                "use the Research Web action."
             )
         lines.append("")
         lines.append(
@@ -134,11 +118,7 @@ class ResearchSettings:
             "local knowledge base. Only Automatic Web Research is a "
             "true on/off switch today."
         )
-        lines.append("")
-        lines.append("Toggle a setting with: settings web|local|notes|collections")
         return "\n".join(lines)
-
-
 __all__ = [
     "DEFAULT_SETTINGS",
     "DEFAULT_SETTINGS_PATH",
