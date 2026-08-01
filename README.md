@@ -232,7 +232,7 @@ behavior.
 
 See LICENSE for licensing information.
 
-## Known Issues
+### Known Issues
 
 BrisartAI is under active nightly development. This is a running list of
 known gaps and rough edges -- not blockers to using it, but things to be
@@ -240,27 +240,32 @@ aware of before you rely on it for something important. These get worked
 down over successive patches; nothing here is a surprise to the maintainer.
 
 - **Web crawler indexes off-topic results.** The crawler currently only
-  rejects pages via a blocklist (dictionary/thesaurus hosts, bare-function-
-  word Wikipedia disambiguation pages). It has no positive relevance check
-  at crawl time -- anything not explicitly blocked gets indexed, and
-  relevance is only sorted out afterward during ranking. Expect some
-  irrelevant pages to make it into the index on ambiguous queries.
-- **The desktop UI freezes during web research.** There is no background
-  threading yet. Asking a question that triggers a web search blocks the
-  Tk main loop until search + crawl finish, with no progress indicator and
-  no way to cancel. On slow networks or multiple search-provider fallbacks,
-  this can take 30-90+ seconds.
-- **The "Automatic Web Research" settings toggle has no effect on typed
-  questions.** The desktop chat box always forces a fresh web search
-  (`force_web=True`) regardless of that setting. The toggle currently only
-  matters if you call the backend service directly with
-  `force_web=False`.
+rejects pages via a blocklist (dictionary/thesaurus hosts, bare-function-
+word Wikipedia disambiguation pages). It has no positive relevance check
+at crawl time -- anything not explicitly blocked gets indexed, and
+relevance is only sorted out afterward during ranking. Expect some
+irrelevant pages to make it into the index on ambiguous queries.
 - **No automated test coverage.** The legacy test suite was removed for
-  testing pre-beta behavior that no longer applies. Ranking, synthesis, and
-  crawler-rejection logic are currently verified by manual testing only.
+testing pre-beta behavior that no longer applies. Ranking, synthesis, and
+crawler-rejection logic are currently verified by manual testing only.
 - **No error handling around database/session startup.** If the SQLite
-  index file can't be opened (locked, read-only, missing permissions),
-  the app will crash with a raw traceback instead of a clean message.
-- **Diagnostics only print to console.** Search-provider failures,
+index file can't be opened (locked, read-only, missing permissions),
+the app will crash with a raw traceback instead of a clean message.
+
+#### Recently Fixed (1.0.0-beta.3)
+
+- **The desktop UI no longer freezes during web research.** `ui/app.py`
+now runs the search + crawl on a background thread and marshals the
+result back onto the Tk main loop, so the window stays responsive instead
+of blocking for 30-90+ seconds. There is still no progress indicator or
+way to cancel an in-flight request.
+- **The "Automatic Web Research" settings toggle now affects typed
+questions.** Ordinary chat questions respect the toggle; the explicit
+"Research Web" sidebar action still always forces a fresh web search,
+since that's a direct request.
+- **Diagnostics are no longer console-only.** Search-provider failures,
+robots.txt rejections, and filtered results are now surfaced as system
+messages in the chat transcript, in addition to being printed to console.
+
   robots.txt rejections, and filtered results are logged with `print()`
   and are not surfaced anywhere in the Tkinter UI itself.

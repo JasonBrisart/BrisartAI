@@ -1,5 +1,86 @@
 # Changelog
 
+## 1.0.0-beta.3
+
+Fixed:
+- The desktop UI no longer freezes during web research. `ui/app.py` now runs
+  `BrisartService.ask()` on a background thread and marshals the result back
+  onto the Tk main loop via `after()`, instead of blocking the main loop for
+  the full duration of the search + crawl (previously 30-90+ seconds on slow
+  networks or multiple search-provider fallbacks).
+- `knowledge/index.py`'s `Index` and `core/session_memory.py`'s
+  `SessionMemory` SQLite connections are now opened with
+  `check_same_thread=False`, since answers are produced on a background
+  thread while both connections are created on the main thread. Access
+  remains serialized at the application level via the existing `_busy` flag,
+  so no additional locking was required for correctness.
+- The "Automatic Web Research" settings toggle now actually affects typed
+  chat questions. Previously `ui/service.py`'s `ask()` always forced
+  `force_web=True`, so the toggle had no effect on anything except direct
+  backend calls. `ask()` now defaults `force_web` to the current
+  `auto_web_research` setting whenever the caller doesn't explicitly
+  override it (`ui/service.py`).
+- Diagnostic output from the crawler/search/policy/fetcher layers
+  (WARN/SKIP/ERROR lines) is no longer console-only. `ui/service.py`
+  captures `print()` output during `ask()` via
+  `contextlib.redirect_stdout` and exposes the relevant lines through
+  `last_diagnostics`; `ui/app.py` surfaces them in the chat transcript as
+  system messages after each answer.
+
+Changed:
+- The explicit "Research Web" sidebar action now always forces a fresh
+  public web search (`force_web=True`) regardless of the Automatic Web
+  Research setting, since it represents a direct, deliberate user request.
+  Ordinary typed questions in the chat box now respect the setting instead
+  of always forcing a web search (`ui/app.py`).
+- The status message shown before an answer now distinguishes between
+  "Searching the public web and reading the top results..." and "Searching
+  your imported files and notes..." depending on whether a web search will
+  actually run for that question (`ui/app.py`).
+
+Known Issues carried forward from beta.2 (see README.md):
+- No positive relevance check at crawl time -- the crawler still only
+  rejects pages via the blocklist; anything not explicitly blocked gets
+  indexed, and relevance is only sorted out afterward during ranking
+  (`web/crawler.py`).
+- No error handling around database/session startup -- if the SQLite index
+  file can't be opened (locked, read-only, missing permissions), the app
+  still crashes with a raw traceback instead of a clean message
+  (`knowledge/index.py`, `core/session_memory.py`).
+- No automated test coverage. Ranking, synthesis, and crawler-rejection
+  logic are still verified by manual testing only.
+
+Current Subsystem Layout:
+```
+core/
+├── conversation.py
+├── session_memory.py
+└── settings.py
+
+knowledge/
+├── index.py
+├── ingest.py
+├── ranker.py
+├── synthesizer.py
+└── vault.py
+
+ui/
+├── app.py
+├── chat_panel.py
+├── dialogs.py
+├── service.py
+├── sidebar.py
+└── theme.py
+
+web/
+├── crawler.py
+├── fetcher.py
+├── models.py
+├── policy.py
+├── search.py
+└── stats.py
+```
+
 ## 1.0.0-beta.2
 
 Removed:

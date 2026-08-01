@@ -3,7 +3,6 @@
 Stores compact recent user topics instead of huge assistant outputs or
 raw shell commands.
 """
-
 from __future__ import annotations
 
 import re
@@ -18,7 +17,11 @@ class SessionMemory:
     """SQLite-backed compact session memory."""
 
     def __init__(self, db_path: str):
-        self.conn = sqlite3.connect(db_path)
+        # check_same_thread=False: web research answers are produced on a
+        # background thread (see ui/app.py) while this connection is
+        # created on the main thread. Access is already serialized at the
+        # application level (only one request in flight at a time).
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS conversation_memory (

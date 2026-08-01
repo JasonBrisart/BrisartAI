@@ -4,11 +4,12 @@ Pure Python / Tkinter standard library only. This is the only entry
 point for BrisartAI; the terminal chat/CLI mode from earlier alpha
 releases has been removed.
 """
-
 from __future__ import annotations
 
+import threading
 import tkinter as tk
 from tkinter import ttk
+from typing import Optional
 
 from brisart_ai import APP_NAME, __version__
 from brisart_ai.knowledge.index import DEFAULT_DB
@@ -83,32 +84,59 @@ class BrisartApp(tk.Tk):
         self.sidebar.set_status(total, files, web)
 
     # -- shared answer flow -----------------------------------------------
-    def _answer_question(self, question: str) -> None:
-        """Search the web for a question and show the answer inline.
+    def _answer_question(
+        self,
+        question: str,
+        force_web: Optional[bool] = None,
+    ) -> None:
+        """Answer a question in the background and show the result inline.
 
-        A short status line is shown first and the UI is flushed with
-        ``update_idletasks`` so the window repaints before the (possibly
-        several-second) web search runs, instead of looking frozen.
+        Runs the (possibly several-second) search on a background
+        thread so the Tk main loop keeps repainting instead of
+        freezing. Only one request is allowed in flight at a time via
+        ``_busy``.
+
+        ``force_web`` is left as ``None`` for ordinary typed questions,
+        so whether the public web is searched is governed by the
+        "Automatic Web Research" setting. The explicit "Research Web"
+        sidebar action passes ``force_web=True`` to guarantee a fresh
+        search regardless of that setting, since the user asked for it
+        directly.
         """
-
         question = question.strip()
         if not question or self._busy:
             return
-
         self._busy = True
-        self.chat.append_system(
-            "Searching the public web and reading the top results..."
+        searching_web = (
+            force_web
+            if force_web is not None
+            else self.service.settings.get("auto_web_research")
         )
-        self.update_idletasks()
+        if searching_web:
+            self.chat.append_system(
+                "Searching the public web and reading the top results..."
+            )
+        else:
+            self.chat.append_system(
+                "Searching your imported files and notes..."
+            )
 
-        try:
-            answer = self.service.ask(question)
-        except Exception as exc:  # keep the UI alive even on backend errors
-            answer = f"Something went wrong answering that: {exc}"
-        finally:
-            self._busy = False
+        def worker() -> None:
+            try:
+                answer = self.service.ask(question, force_web=force_web)
+            except Exception as exc:  # keep the UI alive even on backend errors
+                answer = f"Something went wrong answering that: {exc}"
+            # Marshal back onto the Tk main thread before touching widgets.
+            self.after(0, self._on_answer_ready, answer)
 
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_answer_ready(self, answer: str) -> None:
+        """Runs on the main thread once the background answer is ready."""
+        self._busy = False
         self.chat.append_assistant(answer)
+        for diagnostic_line in self.service.last_diagnostics:
+            self.chat.append_system(diagnostic_line)
         self._refresh_status()
 
     # -- chat -------------------------------------------------------------
@@ -141,7 +169,9 @@ class BrisartApp(tk.Tk):
         if not query:
             return
         self.chat.append_user(query)
-        self._answer_question(query)
+        # Explicit "Research Web" action always forces a fresh web
+        # search, regardless of the Automatic Web Research toggle.
+        self._answer_question(query, force_web=True)
 
     def _action_settings(self) -> None:
         SettingsDialog(self, self.service, on_change=self._refresh_status)
