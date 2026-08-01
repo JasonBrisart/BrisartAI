@@ -18,6 +18,24 @@ USER_AGENT = (
     "(local-first research assistant; respectful public-web crawler)"
 )
 
+# Search-engine front ends serve a *degraded* results page to unknown
+# bot user agents: DuckDuckGo HTML/Lite return an "Unfortunately, bots
+# use DuckDuckGo too" anomaly challenge (zero results), and Bing quietly
+# swaps the real organic results for a dictionary/glossary vertical -- so
+# "how many cats are in america" came back as ten definitions of the
+# word "many". Requesting those endpoints with a normal browser UA
+# returns the genuine organic results.
+#
+# This is used ONLY for the search-provider requests in web/search.py.
+# Actual page crawling in web/fetcher.py keeps the honest BrisartAI
+# USER_AGENT above so crawled sites can still identify and robots-block
+# us correctly.
+SEARCH_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
 ROBOTS_TIMEOUT = 8
 MAX_ROBOTS_BYTES = 512_000
 
@@ -241,6 +259,7 @@ __all__ = [
     "MAX_ROBOTS_BYTES",
     "ROBOTS_TIMEOUT",
     "RobotsCache",
+    "SEARCH_USER_AGENT",
     "USER_AGENT",
     "is_local_or_private_host",
     "is_localhost",

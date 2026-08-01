@@ -5,12 +5,11 @@ pass to be indexed.
 
 Three layers keep junk out of your answers:
 
-1. QUERY CLEANING + INTENT HINTS: before a question is sent to a search
-   engine, filler/question words are stripped, and the *intent* of the
-   question is turned into a helpful keyword. "how many cats are in
-   america" becomes the search "cats america number" -- the "many" is
-   removed (so no dictionary card) and "number" is added (so results
-   lean toward quantities/populations instead of random cat facts).
+1. QUERY NORMALIZATION: a question keeps its natural phrasing when sent
+   to a search engine ("how many cats are in america" is searched as
+   written), because that phrasing is what matches pages containing the
+   actual answer. A keyword-only form is kept as a fallback for when the
+   phrased question returns nothing usable.
 2. OFF-TOPIC WIKI REJECTION: a Wikipedia page whose title is itself a
    bare function word (e.g. /wiki/Many, the disambiguation page for the
    word "many") is rejected -- it is about the word, not your topic.
@@ -61,12 +60,36 @@ _QUERY_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-']*")
 
 
 def clean_search_query(query: str) -> str:
-    """Strip filler words and append intent keywords for web search.
+    """Normalize a question for web search, keeping its natural phrasing.
 
-    "how many cats are in america" -> "cats america number"
+    Search engines rank full natural-language questions well, because the
+    question's phrasing matches the pages that actually answer it.
+    Stripping a question down to bare keywords ("how many cats are in
+    america" -> "cats america number") throws that signal away and
+    returns pages merely *about* the topic instead of pages that answer
+    it.
 
-    If every word is filler, the original whitespace-normalized query is
-    returned so we never search for an empty string.
+    So the question is passed through essentially intact: whitespace is
+    normalized and trailing punctuation is dropped.
+
+    Dictionary-definition hijacking is not prevented here (the old
+    rationale for stripping "many"); it is handled where it belongs, by
+    the shared blocklist in brisart_ai/blocklist.py at ingest time.
+    """
+    raw = str(query or "")
+    normalized = " ".join(raw.split())
+    stripped = normalized.strip().strip("?!.,;:").strip()
+    return stripped or normalized
+
+
+def search_keyword_fallback(query: str) -> str:
+    """Keyword-only form of a question, used as a secondary attempt.
+
+    Question words are removed and an intent keyword appended, e.g.
+    "how many cats are in america" -> "cats america number". This is a
+    fallback tried only when the natural-language query returns nothing
+    usable, since it finds topical pages but not necessarily answering
+    ones.
     """
     raw = str(query or "")
     lowered = " " + " ".join(raw.lower().split()) + " "
@@ -98,10 +121,17 @@ def clean_search_query(query: str) -> str:
 
 
 def _topic_terms(cleaned_query: str) -> Set[str]:
-    """The meaningful terms of a cleaned query, for relevance checks."""
+    """The meaningful terms of a query, for relevance checks.
+
+    Function/question words are excluded. This matters now that the
+    search query keeps its natural phrasing: if "many" were treated as a
+    topic term, is_offtopic_wiki() would consider /wiki/Many on-topic and
+    the dictionary-page guard would stop working.
+    """
     return {
         token.casefold()
         for token in _QUERY_WORD.findall(cleaned_query)
+        if token.casefold() not in FUNCTION_WORDS
     }
 
 
@@ -279,6 +309,29 @@ def web_search_and_ingest(
         )
 
     if not filtered:
+        # The natural-language question found nothing usable (or every
+        # result was junk). Retry once with the keyword-only form, which
+        # sometimes reaches pages the phrased question misses.
+        fallback_terms = search_keyword_fallback(query)
+        if fallback_terms and fallback_terms != search_terms:
+            print(
+                "No usable results for the phrased question; retrying "
+                f"with keywords: {fallback_terms!r}"
+            )
+            fallback_topics = _topic_terms(fallback_terms)
+            fallback_links = search_public_web(
+                fallback_terms,
+                limit=limit,
+            )
+            filtered = [
+                link
+                for link in fallback_links
+                if not _should_reject(link, fallback_topics)
+            ]
+            if filtered:
+                topics = fallback_topics
+
+    if not filtered:
         print(
             "No usable public search results were found or the provider "
             "was unavailable."
@@ -304,5 +357,6 @@ __all__ = [
     "clean_search_query",
     "content_exists",
     "crawl_urls_to_index",
+    "search_keyword_fallback",
     "web_search_and_ingest",
 ]
