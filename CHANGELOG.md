@@ -52,13 +52,7 @@ Fixed:
   (README.md, CHANGELOG.md) and orphaned `__pycache__` bytecode for the
   modules removed above.
 
-Note: the beta.1 entry below is left as written for historical accuracy
-(it describes what beta.1 actually shipped with at the time), but a large
-share of those features were removed in later stripping sessions before a
-1.0.0-beta.2 tag was ever cut. This entry documents that removal so the
-changelog stays truthful about what currently exists in source.
-
-Current Subsystem Layout (post-beta.2):
+Current Subsystem Layout:
 ```
 core/
 ├── conversation.py
