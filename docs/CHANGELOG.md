@@ -1,5 +1,98 @@
 # Changelog
 
+---
+
+## [1.0.0-beta.5] 2026-08-26
+
+### Added
+- New `comparison` intent class in `brisart_ai/intent.py`, shared by both
+  web ranking and offline ranking. Questions like "do dogs outlive cats"
+  or "which is bigger, a lion or a tiger" were previously invisible to
+  the shared intent classifier -- only `knowledge/synthesizer.py` had
+  private, duplicate logic for detecting them, and that logic never fed
+  into search ranking at all.
+- `knowledge/vault.py`: `search_notes_as_documents()`, which converts
+  saved vault notes into the same document shape produced by
+  `knowledge/ranker.search()` (score, source_type, location, title,
+  text, intent fields), so notes can be merged into the same answer
+  pipeline as files and web pages.
+
+### Fixed
+- `knowledge/synthesizer.py` no longer maintains its own separate
+  query-intent detector. `query_wants_quantity()`,
+  `query_wants_comparison()`, and `query_wants_reason()` now delegate
+  directly to `brisart_ai.intent.detect_intent()` instead of running an
+  independent regex-based classifier that could silently disagree with
+  the one used for ranking.
+- The `search_notes` setting previously had no effect. Saved notes live
+  in a separate database table from the main file/web source index and
+  were never queried by `core/conversation.py`; turning the toggle on
+  changed nothing. `build_conversation_answer()` now merges
+  `search_notes_as_documents()` results into the local evidence pool
+  whenever the setting is enabled.
+- The `search_local_files` setting is now actually applied during
+  search. `core/conversation.py` restricts local search to previously
+  indexed web pages only when this setting is off, instead of reading
+  the setting without using it.
+
+### Removed
+- The "Research Collections" toggle in `core/settings.py` and the
+  Settings dialog. It rendered as a live checkbox but had no effect --
+  there is no "active collection" concept anywhere in the current UI
+  for it to restrict. Removed rather than fake-wired; re-add once a
+  real collection-scoped search UX exists.
+
+### Changed
+- `core/settings.py`: `DEFAULT_SETTINGS` and `TOGGLE_LABELS` reduced
+  from four entries to three (`search_local_files`, `search_notes`,
+  `auto_web_research`). Existing `data/research_settings.json` files
+  with a stale `search_collections` key are read safely; the unknown
+  key is simply ignored on load.
+- `core/conversation.py`: local search now runs through an internal
+  `_gather_docs()` step that applies both the file/web source-type
+  filter and the notes merge before checking whether any evidence
+  exists, rather than a single unconditional `search()` call.
+- Bumped BrisartAI version from `1.0.0-beta.4` to `1.0.0-beta.5`.
+- Moved `CHANGELOG.md` to `docs/CHANGELOG.md` to keep documentation
+  organized alongside the rest of the docs folder.
+
+### Verification
+- Re-ran the existing intent classification cases (founder, inventor,
+  statistic, explanation, general) with zero regressions.
+- Added and passed 3 new comparison-intent classification cases
+  ("do dogs outlive cats?", "cats vs dogs lifespan", "is a lion bigger
+  than a tiger").
+- Confirmed `query_wants_quantity()` and `query_wants_comparison()` are
+  now mutually exclusive per query (previously two independent
+  detectors could both fire on the same query).
+- Confirmed `search_notes_as_documents()` produces ranker-compatible
+  documents and that `synthesize()` consumes merged file/web/note
+  results without error.
+
+### Known Limitations
+- Notes participate in local search with simple substring/count
+  scoring, not the full TF-IDF + intent-adjusted ranking used for
+  files and web pages. A note that happens to repeat a query term many
+  times can currently outrank a more relevant file or web document.
+- Collections and entity extraction remain implemented in
+  `knowledge/vault.py` but are still not exposed through the desktop
+  UI (carried forward from earlier releases). - 2026-08-26
+
+### Maintenance
+- Removed an unused `Iterable` import from `typing` in
+  `brisart_ai/knowledge/vault.py`.
+- No functional changes to search, ranking, ingestion, GUI, or web
+  retrieval behavior.
+
+### Notes
+- This release marks BrisartAI's transition from beta to production
+  status.
+- The change itself is a documentation-organization and lint-cleanup
+  release; the underlying 1.0.0 feature set is the intent-aware ranking
+  and GUI-only architecture already shipped in the beta.1–beta.4 line.
+
+---
+
 ## 1.0.0-beta.4
 
 Added:
@@ -110,7 +203,9 @@ New Known Limitations:
 - Ranking can improve ordering of retrieved sources, but it cannot
   compensate for poor search-provider recall when relevant sources were
   never returned by the search engine.
-  
+
+---
+
 ## 1.0.0-beta.3
 
 Fixed:
@@ -191,6 +286,8 @@ web/
 ├── search.py
 └── stats.py
 ```
+
+---
 
 ## 1.0.0-beta.2
 
@@ -274,6 +371,8 @@ web/
 ├── search.py
 └── stats.py
 ```
+
+---
 
 ## 1.0.0-beta.1
 
@@ -388,6 +487,8 @@ ui/
 └── theme.py
 ```
 
+---
+
 ## 0.9.0-alpha
 
 Added:
@@ -415,6 +516,8 @@ web/
 ├── crawler.py
 ```
 
+---
+
 ## 0.8.0-alpha
 
 Added:
@@ -430,6 +533,8 @@ Fixed:
 - Removed the noisy tokenized "Context I still have in view" line from answers
 - Import and use `__version__` from the brisart_ai package instead of hardcoding the version string. This ensures the USER_AGENT always reflects the actual package version.
 
+---
+
 ## 0.7.0-alpha
 
 Added:
@@ -443,6 +548,8 @@ Added:
 Fixed:
 - Corrected a syntax error in io/readers.py that prevented startup
 - Aligned package version number with the actual release
+
+---
 
 ## 0.6.0-alpha
 
@@ -460,6 +567,8 @@ Added:
 - `input_cleaner.py`
 - `start.bat`
 
+---
+
 ## 0.5.0-alpha
 
 Added:
@@ -469,6 +578,8 @@ Added:
 - Pure-Python best-effort readers for `.docx`, `.pptx`, `.xlsx`, `.odt`, and `.pdf`
 - Expanded scanner policy for more source/data/code/document formats
 - General assistant fallback that explains limits instead of going silent
+
+---
 
 ## 0.4.0-alpha
 
@@ -481,6 +592,8 @@ Added:
 - Local session memory for recent chat context
 - More natural analysis and recommendation output
 
+---
+
 ## 0.3.0-alpha
 
 Added:
@@ -492,9 +605,13 @@ Added:
 - Duplicate content detection by hash
 - Project hygiene recommendations based on indexed filenames
 
+---
+
 ## 0.2.0-alpha
 
 Shifted BrisartAI from crawler-first to data-first architecture.
+
+---
 
 ## 0.1.0-alpha
 

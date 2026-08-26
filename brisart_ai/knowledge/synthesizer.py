@@ -7,16 +7,17 @@ list. It does not emit "Observation:", "Confidence:", "Why I think
 this:", or "Suggested next move:" scaffolding.
 
 Intent awareness: a question's phrasing hints at the KIND of sentence
-that actually answers it, not just its topic words. Three intents are
-detected directly from the raw query text (not the tokenized/stopword-
-filtered version, since words like "why" and "how" are themselves
-stopwords and would otherwise be invisible to this check):
+that actually answers it, not just its topic words. Query-level
+classification is delegated entirely to ``brisart_ai.intent`` (the same
+shared classifier used by web search and offline ranking) so there is
+exactly one place in the codebase that decides what kind of question a
+query is:
 
-  * Quantity  ("how many", "how much", "population", "percent", ...)
+  * Statistic  ("how many", "how much", "population", "percent", ...)
     -> boost sentences that contain an actual numeric quantity.
   * Comparison ("vs", "outlive", "better", "longer", "compared to", ...)
     -> boost sentences that contain comparative language.
-  * Reason    ("why ...")
+  * Explanation ("why ...")
     -> boost sentences that contain causal language ("because",
        "due to", "caused by", ...).
 
@@ -24,63 +25,49 @@ This is what stops a question like "do dogs outlive cats" from
 returning a generic sentence about working dog breeds, and instead
 prefers a sentence that actually compares dog and cat lifespans.
 """
-
 from __future__ import annotations
 
 import collections
 import re
 from typing import Dict, Iterable, List, Set, Tuple
 
+from brisart_ai.intent import (
+    INTENT_COMPARISON,
+    INTENT_EXPLANATION,
+    INTENT_STATISTIC,
+    detect_intent,
+)
 from brisart_ai.util import split_sentences, tokenize
 
 Document = Dict[str, object]
 Candidate = Tuple[float, int, str, Document]
 
-
-# -- intent detection (raw query text, NOT the stopword-filtered tokens) ----
-
-# Words/phrases that signal the user wants a numeric answer.
-_QUANTITY_INTENT: Set[str] = {
-    "number", "amount", "population", "many", "much", "count", "total",
-    "percent", "percentage", "average", "how", "size", "figure",
-    "figures", "statistics", "stat", "stats",
-}
-
-# Comparison-question phrasing, checked against the raw query.
-_COMPARISON_QUERY_RE = re.compile(
-    r"\b("
-    r"vs\.?|versus|compare|comparison|compared|"
-    r"outlive[sd]?|outlast[sd]?|"
-    r"better|worse|longer|shorter|faster|slower|"
-    r"bigger|smaller|cheaper|more\s+expensive|"
-    r"higher|lower|stronger|weaker|"
-    r"difference|different|which\s+is"
-    r")\b",
-    re.IGNORECASE,
-)
-
-# "why" questions, checked against the raw query. "why" is itself a
-# stopword in util.tokenize(), so it must be detected from the raw text.
-_REASON_QUERY_RE = re.compile(r"\bwhy\b", re.IGNORECASE)
+# -- query-level intent detection ---------------------------------------
+# Query classification is delegated entirely to brisart_ai.intent so
+# there is exactly one place that decides what KIND of question a query
+# is. This module previously kept its own separate quantity/comparison/
+# reason detectors (a second, drifting copy of intent classification
+# using its own regex vocabulary); it now just asks the shared
+# classifier and maps its answer onto the three sentence-selection
+# modes below.
 
 
 def query_wants_quantity(query: str) -> bool:
     """Return True when the query is asking for a count or measure."""
-    return bool(set(tokenize(query)) & _QUANTITY_INTENT)
+    return detect_intent(query) == INTENT_STATISTIC
 
 
 def query_wants_comparison(query: str) -> bool:
     """Return True when the query is asking to compare two things."""
-    return bool(_COMPARISON_QUERY_RE.search(str(query or "")))
+    return detect_intent(query) == INTENT_COMPARISON
 
 
 def query_wants_reason(query: str) -> bool:
-    """Return True when the query is a "why" question."""
-    return bool(_REASON_QUERY_RE.search(str(query or "")))
+    """Return True when the query is a "why"/explanation question."""
+    return detect_intent(query) == INTENT_EXPLANATION
 
 
-# -- sentence-level signal detection -----------------------------------
-
+# -- sentence-level signal detection -------------------------------------
 # A bare digit anywhere in a sentence.
 _HAS_DIGIT = re.compile(r"\d")
 
@@ -173,7 +160,6 @@ def sentence_score(
     )
     density = overlap / max(1, len(words))
     score = float(overlap + density)
-
     # Intent boosts only apply to sentences that are at least somewhat
     # on-topic (share a query term), so we don't surface a random
     # unrelated sentence just because it happens to contain "because".
@@ -187,7 +173,6 @@ def sentence_score(
             score += 8.0
         if reason_mode and _HAS_REASON_SIGNAL.search(sentence):
             score += 8.0
-
     return score
 
 
@@ -208,15 +193,12 @@ def synthesize(
         return (
             "I don't have any indexed information that answers that yet."
         )
-
     safe_source_limit = max(1, int(max_sources))
     safe_sentence_limit = max(1, int(max_sentences))
     query_terms = set(tokenize(query))
-
     quantity_mode = query_wants_quantity(query)
     comparison_mode = query_wants_comparison(query)
     reason_mode = query_wants_reason(query)
-
     candidates: List[Candidate] = []
     for source_number, document in enumerate(
         docs[:safe_source_limit],
@@ -235,12 +217,10 @@ def synthesize(
                 candidates.append(
                     (score, source_number, sentence, document)
                 )
-
     candidates.sort(
         key=lambda item: item[0],
         reverse=True,
     )
-
     chosen: List[Candidate] = []
     seen = set()
     for candidate in candidates:
@@ -254,13 +234,11 @@ def synthesize(
         )
         if len(chosen) >= safe_sentence_limit:
             break
-
     if not chosen:
         return (
             "I found related sources, but none of them contained a "
             "passage that directly answers that."
         )
-
     # Lead with the single best sentence that actually matches the
     # detected intent (a real number, a real comparison, a real reason),
     # so that sentence is the first thing seen rather than a merely
@@ -275,7 +253,6 @@ def synthesize(
         signal_re = _HAS_REASON_SIGNAL
     else:
         signal_re = None
-
     if signal_re is not None:
         chosen.sort(
             key=lambda item: (
@@ -283,7 +260,6 @@ def synthesize(
                 -item[0],
             )
         )
-
     # Group chosen sentences by their original source, then assign
     # sequential display numbers so citations read 1, 2, 3 with no gaps.
     by_source: Dict[int, List[str]] = collections.defaultdict(list)
@@ -294,11 +270,9 @@ def synthesize(
             order.append(source_number)
         by_source[source_number].append(_clean_sentence(sentence))
         original_docs[source_number] = document
-
     display_number: Dict[int, int] = {}
     for new_index, original_number in enumerate(order, start=1):
         display_number[original_number] = new_index
-
     lines: List[str] = []
     for original_number in order:
         paragraph = " ".join(by_source[original_number][:3])
@@ -306,14 +280,12 @@ def synthesize(
             f"[{display_number[original_number]}] {paragraph}"
         )
         lines.append("")
-
     lines.append("Sources:")
     for original_number in order:
         lines.append(
             f"[{display_number[original_number]}] "
             f"{format_source(original_docs[original_number])}"
         )
-
     return "\n".join(lines).rstrip()
 
 

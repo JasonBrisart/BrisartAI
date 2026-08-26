@@ -1,9 +1,9 @@
 """Conversation router for BrisartAI.
 
 Order of logic:
-
 1. Clean accidental shell syntax from chat input.
-2. Search indexed local data.
+2. Search indexed local data, honoring the Local Files and Research
+   Notes settings toggles.
 3. If a fresh web search is forced (``force_web=True``), or no local
    evidence exists and Automatic Web Research is enabled in settings,
    search the public web and re-check for evidence.
@@ -12,7 +12,6 @@ Order of logic:
 5. If no evidence exists at all, answer with a simple grounding label
    instead of a conversational fallback.
 """
-
 from __future__ import annotations
 
 from typing import Optional
@@ -21,6 +20,7 @@ from brisart_ai.core.settings import ResearchSettings
 from brisart_ai.io.input_cleaner import normalize_shellish_input
 from brisart_ai.knowledge.ranker import search
 from brisart_ai.knowledge.synthesizer import synthesize
+from brisart_ai.knowledge.vault import search_notes_as_documents
 from brisart_ai.web.crawler import web_search_and_ingest
 
 
@@ -44,20 +44,49 @@ def build_conversation_answer(
     When ``force_web`` is False, the older behavior applies: local
     evidence is used first, and the public web is only searched when no
     local evidence is found and ``auto_web_research`` is enabled.
-    """
 
+    The ``search_local_files`` setting controls whether imported files
+    are included in local search (previously indexed web pages remain
+    searchable either way, so the local index never goes completely
+    silent just because this toggle is off). The ``search_notes``
+    setting controls whether saved vault notes are merged into the
+    local evidence pool; notes live in a separate table from the main
+    source index (see ``knowledge/vault.py``), so this is a real merge
+    of two result sets rather than a query filter.
+    """
     cleaned = normalize_shellish_input(query)
     recent = memory.recent_topics(limit=4)
 
-    docs = search(index, cleaned, limit=limit)
+    include_local_files = (
+        settings is None or settings.get("search_local_files")
+    )
+    source_type_filter = None if include_local_files else "web"
+    include_notes = bool(settings is not None and settings.get("search_notes"))
+
+    def _gather_docs():
+        found = search(
+            index,
+            cleaned,
+            limit=limit,
+            source_type=source_type_filter,
+        )
+        if include_notes:
+            note_docs = search_notes_as_documents(index, cleaned, limit=limit)
+            if note_docs:
+                found = sorted(
+                    found + note_docs,
+                    key=lambda doc: doc.get("score", 0.0),
+                    reverse=True,
+                )[:limit]
+        return found
+
+    docs = _gather_docs()
 
     auto_enabled = bool(
         settings is not None and settings.get("auto_web_research")
     )
-
     should_search_web = force_web or (not docs and auto_enabled)
     used_web = False
-
     if should_search_web:
         used_web = True
         web_search_and_ingest(
@@ -66,7 +95,7 @@ def build_conversation_answer(
             limit=web_limit,
             crawl_depth=0,
         )
-        docs = search(index, cleaned, limit=limit)
+        docs = _gather_docs()
 
     if docs:
         answer = synthesize(cleaned, docs, recent_topics=recent)

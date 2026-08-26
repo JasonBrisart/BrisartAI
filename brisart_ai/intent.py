@@ -36,7 +36,7 @@ candidate returns the exact terms that fired, so
 where it did.
 
 Design constraints
-------------------
+-------------------
 * Pure standard library. No embeddings, no models, no network.
 * Intent is a HINT, not a filter. Nothing is ever dropped for having the
   wrong intent -- scores are nudged, so a strong term-overlap match still
@@ -49,12 +49,11 @@ Design constraints
   dictionary blocklists rotted before being consolidated.
 
 Deliberate non-goals
---------------------
+---------------------
 This does not attempt correct ranking in general, and it is not a
 relevance framework. It removes a specific class of obviously-wrong
 result. Anything subtler is left to term overlap.
 """
-
 from __future__ import annotations
 
 import re
@@ -69,6 +68,7 @@ INTENT_FOUNDER = "founder"
 INTENT_INVENTOR = "inventor"
 INTENT_STATISTIC = "statistic"
 INTENT_EXPLANATION = "explanation"
+INTENT_COMPARISON = "comparison"
 INTENT_GENERAL = "general"
 
 ALL_INTENTS: Tuple[str, ...] = (
@@ -76,6 +76,7 @@ ALL_INTENTS: Tuple[str, ...] = (
     INTENT_INVENTOR,
     INTENT_STATISTIC,
     INTENT_EXPLANATION,
+    INTENT_COMPARISON,
     INTENT_GENERAL,
 )
 
@@ -177,6 +178,25 @@ _WHEN_PHRASES: Tuple[Tuple[str, ...], ...] = (
     ("what", "year"),
 )
 
+# Comparison-question phrasing, matched directly against the raw query.
+# This is the single source of truth for "is this a comparison
+# question" -- knowledge/synthesizer.py previously kept its own
+# duplicate copy of this exact pattern purely for sentence-selection
+# purposes; it now derives its quantity/comparison/reason modes from
+# detect_intent() instead, so there is exactly one place deciding what
+# kind of question a query is.
+_COMPARISON_QUERY_RE = re.compile(
+    r"\b("
+    r"vs\.?|versus|compare|comparison|compared|"
+    r"outlive[sd]?|outlast[sd]?|"
+    r"better|worse|longer|shorter|faster|slower|"
+    r"bigger|smaller|cheaper|more\s+expensive|"
+    r"higher|lower|stronger|weaker|"
+    r"difference|different|which\s+is"
+    r")\b",
+    re.IGNORECASE,
+)
+
 _WORD_RE = re.compile(r"[a-z0-9][a-z0-9'\-]*")
 
 
@@ -231,6 +251,11 @@ INTENT_BOOSTS: Dict[str, Tuple[str, ...]] = {
         "works", "working", "reason", "reasons", "how", "why",
         "because", "theory", "principle", "principles",
     ),
+    INTENT_COMPARISON: (
+        "comparison", "compare", "compares", "compared", "versus", "vs",
+        "difference", "differences", "study", "research", "data",
+        "statistics", "analysis", "report",
+    ),
     INTENT_GENERAL: (),
 }
 
@@ -262,6 +287,11 @@ INTENT_PENALTIES: Dict[str, Tuple[str, ...]] = {
         "login", "account", "album", "song", "movie", "film",
         "glossary", "dictionary", "definition", "list-of",
         "best-", "top-10", "top-", "review", "reviews",
+    ),
+    INTENT_COMPARISON: (
+        "buy", "shop", "store", "pricing", "coupon", "login", "account",
+        "album", "song", "movie", "film", "glossary", "dictionary",
+        "definition",
     ),
     INTENT_GENERAL: (),
 }
@@ -302,7 +332,6 @@ BOOST_WEIGHTS: Dict[str, float] = {
     SIGNAL_PERSON: 2.0,
     SIGNAL_YEAR: 1.5,
 }
-
 PENALTY_WEIGHTS: Dict[str, float] = {
     SIGNAL_WORK: 3.0,
     SIGNAL_GENERIC: 1.5,
@@ -379,7 +408,6 @@ def is_generic_concept_page(text: str, topic_terms: Set[str]) -> bool:
     return False
 
 
-
 def looks_like_person_name(text: str) -> bool:
     """True when ``text`` looks like a personal name, e.g. "Bill Gates".
 
@@ -411,13 +439,11 @@ def looks_like_person_name(text: str) -> bool:
     raw = re.sub(r"\s*\([^)]*\)\s*$", "", raw).strip()
     if not raw or any(ch.isdigit() for ch in raw):
         return False
-
     parts = raw.split()
     if not 2 <= len(parts) <= 3:
         return False
     if any(part.casefold() in _NON_NAME_TOKENS for part in parts):
         return False
-
     # First and last must be proper capitalized words; a middle token may
     # additionally be an initial ("John F. Kennedy").
     if not _NAME_PART_RE.match(parts[0]):
@@ -451,7 +477,6 @@ def name_candidates(text: str) -> List[str]:
     raw = str(text or "").strip()
     if not raw:
         return []
-
     candidates = [raw]
     if "//" in raw or raw.count("/") >= 2:
         path = raw.split("?", 1)[0].split("#", 1)[0]
@@ -488,14 +513,13 @@ def detect_intent(query: str) -> str:
     if not words:
         return INTENT_GENERAL
     word_set = set(words)
-
     if any(_has_phrase(words, phrase) for phrase in _STATISTIC_PHRASES):
         return INTENT_STATISTIC
     if word_set & _STATISTIC_WORDS:
         return INTENT_STATISTIC
-
+    if _COMPARISON_QUERY_RE.search(str(query or "")):
+        return INTENT_COMPARISON
     has_creation = bool(word_set & _CREATION_VERBS)
-
     # An explanation question ("how does a transistor work") outranks the
     # creation reading, but "who invented X" must stay a creation
     # question even though it starts with a question word.
@@ -506,7 +530,6 @@ def detect_intent(query: str) -> str:
             return INTENT_EXPLANATION
         if words[0] in _EXPLANATION_LEAD_WORDS:
             return INTENT_EXPLANATION
-
     if has_creation:
         # A product name means the question is about a product's history,
         # not about who founded the company that ships it.
@@ -515,7 +538,6 @@ def detect_intent(query: str) -> str:
         if word_set & _KNOWN_COMPANIES:
             return INTENT_FOUNDER
         return INTENT_INVENTOR
-
     return INTENT_GENERAL
 
 
@@ -669,6 +691,7 @@ __all__ = [
     "DATE_BOOSTS",
     "DEFAULT_PENALTY_WEIGHT",
     "INTENT_BOOSTS",
+    "INTENT_COMPARISON",
     "INTENT_EXPLANATION",
     "INTENT_FOUNDER",
     "INTENT_GENERAL",
