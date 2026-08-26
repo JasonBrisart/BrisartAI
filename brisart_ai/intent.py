@@ -104,13 +104,6 @@ _CREATION_VERBS: FrozenSet[str] = frozenset(
 # is unreliable, and a wrong guess sends the query to the wrong intent.
 # Unknown entities fall through to the inventor intent, whose boosts
 # (history/origin/developed) are a safe default for creation questions.
-#
-# Projects rather than companies -- Linux, Python, Wikipedia's software --
-# deliberately are NOT listed. "who created linux?" lands on inventor
-# intent, which is correct in substance (Linux is a kernel, not a firm)
-# and in effect: the two classes share the history/person boosts that
-# decide this ranking, so both orderings are identical. Verified by
-# forcing each intent over the same candidate list.
 _KNOWN_COMPANIES: FrozenSet[str] = frozenset(
     {
         "microsoft", "apple", "google", "amazon", "facebook", "meta",
@@ -180,11 +173,10 @@ _WHEN_PHRASES: Tuple[Tuple[str, ...], ...] = (
 
 # Comparison-question phrasing, matched directly against the raw query.
 # This is the single source of truth for "is this a comparison
-# question" -- knowledge/synthesizer.py previously kept its own
-# duplicate copy of this exact pattern purely for sentence-selection
-# purposes; it now derives its quantity/comparison/reason modes from
-# detect_intent() instead, so there is exactly one place deciding what
-# kind of question a query is.
+# question" -- knowledge/synthesizer.py derives its quantity/comparison/
+# reason modes from detect_intent() instead of keeping its own private
+# copy of this logic, so there is exactly one place deciding what kind
+# of question a query is.
 _COMPARISON_QUERY_RE = re.compile(
     r"\b("
     r"vs\.?|versus|compare|comparison|compared|"
@@ -361,6 +353,14 @@ _NAME_INITIAL_RE = re.compile(r"^[A-Z]\.?$")
 # concept of invention in general and never names who invented the thing
 # asked about. Demoted so an entity-specific page outranks them, but not
 # blocked, since they are a reasonable last resort.
+#
+# "law", "legislation", "politics", and "government" were added after a
+# live failure: for the query "what laws have been passed since trump
+# became president", a bare /wiki/Law page (a page about the abstract
+# concept of law, not about any specific legislation) surfaced as a top
+# source purely because it shares the word "law" with the query. See
+# is_bare_generic_concept_title() below for the more precise,
+# ranker-facing helper this list is also used by.
 _GENERIC_CONCEPT_TITLES: FrozenSet[str] = frozenset(
     {
         "invention", "inventions", "inventor", "inventors",
@@ -370,6 +370,7 @@ _GENERIC_CONCEPT_TITLES: FrozenSet[str] = frozenset(
         "founders", "creation", "design", "research", "development",
         "population", "statistics", "demographics", "estimation",
         "explanation", "causality", "behavior", "behaviour",
+        "law", "laws", "legislation", "politics", "government",
     }
 )
 
@@ -384,6 +385,13 @@ def is_generic_concept_page(text: str, topic_terms: Set[str]) -> bool:
     A page is only generic when its title is a single concept word AND
     that word is not itself the subject being asked about, so a genuine
     query about invention as a topic is unaffected.
+
+    Note: this function is intended for a single, already-isolated
+    candidate string (a title or a URL), not a large combined haystack
+    of title+location+body text -- see
+    :func:`is_bare_generic_concept_title` for a stricter, ranker-facing
+    variant that additionally strips common " - Site Name" title
+    suffixes before checking, which this function does not do.
     """
     for candidate in name_candidates(text):
         title = re.sub(r"_", " ", str(candidate or "")).strip()
@@ -406,6 +414,47 @@ def is_generic_concept_page(text: str, topic_terms: Set[str]) -> bool:
             return False
         return True
     return False
+
+
+def is_bare_generic_concept_title(candidate: str) -> bool:
+    """True when ``candidate`` is a bare generic-concept title/slug.
+
+    Unlike :func:`is_generic_concept_page`, this takes a single,
+    already-isolated candidate string -- typically a document's display
+    title (e.g. ``"Law - Wikipedia"``) or a URL-derived slug (e.g. the
+    ``"Law"`` extracted from ``.../wiki/Law``) -- rather than a large
+    combined haystack of title, location, and body text. This makes its
+    behavior precise and independent of whether a URL happens to be
+    embedded somewhere inside a larger string.
+
+    Common trailing " - Site Name" / " | Site Name" suffixes are
+    stripped before comparison, so both ``"Law"`` and ``"Law -
+    Wikipedia"`` correctly match. Only a genuinely bare, single-word
+    title matches; ``"History of the Transistor"`` or ``"Law of South
+    Africa"`` do not, since they carry more than just the concept word.
+
+    >>> is_bare_generic_concept_title("Law")
+    True
+    >>> is_bare_generic_concept_title("Law - Wikipedia")
+    True
+    >>> is_bare_generic_concept_title("History of the Transistor")
+    False
+    >>> is_bare_generic_concept_title("Law of South Africa")
+    False
+    """
+    if not candidate:
+        return False
+    cleaned = re.sub(r"[_\-]+", " ", str(candidate)).strip()
+    cleaned = re.sub(r"\s*\([^)]*\)\s*$", "", cleaned).strip()
+    # Strip a trailing " - Wikipedia" / " | Some Site" style suffix by
+    # splitting on the first hyphen/pipe/colon separator. Only the
+    # portion before the first separator is checked, since site-name
+    # suffixes always come after the article's own title.
+    cleaned = re.split(r"\s+[-|:]\s+", cleaned, maxsplit=1)[0].strip()
+    cleaned = cleaned.casefold()
+    if not cleaned or " " in cleaned:
+        return False
+    return cleaned in _GENERIC_CONCEPT_TITLES
 
 
 def looks_like_person_name(text: str) -> bool:
@@ -473,6 +522,15 @@ def name_candidates(text: str) -> List[str]:
 
     The last path segment is therefore offered as an extra candidate,
     which is where encyclopedia and biography URLs put the subject.
+
+    Note: callers should pass a single title or URL, not a large
+    combined haystack of title+location+body text -- when ``text``
+    contains a URL embedded partway through a longer string, the ``//``/
+    multi-``/`` detection below treats the *entire* string as a path and
+    produces a meaningless "last segment". This is fine for the two
+    documented callers (:func:`looks_like_person_name` checks and
+    :func:`is_generic_concept_page`, which are only ever fed a title or
+    URL directly, never a full haystack in current call sites).
     """
     raw = str(text or "").strip()
     if not raw:
@@ -622,6 +680,16 @@ def score_intent(
     alone. The strong signals (person, year, work-of-art, generic
     concept) are weighted separately and are not subject to that cap,
     because each identifies a page's genre outright.
+
+    Note: this function is only invoked by ranker.py for
+    non-INTENT_GENERAL intents (see knowledge/ranker.py's
+    intent_adjust()). A query with no specific detected intent skips
+    this function entirely, which is why ranker.py additionally runs
+    :func:`is_bare_generic_concept_title` directly against a document's
+    title/location for the INTENT_GENERAL case -- otherwise the generic-
+    concept-page guard embedded in this function (via
+    is_generic_concept_page below) would silently never apply to any
+    query that doesn't classify into one of the five specific intents.
     """
     haystack, tokens = _normalize_haystack(text)
     if not haystack:
@@ -706,6 +774,7 @@ __all__ = [
     "boost_terms",
     "describe_intent",
     "detect_intent",
+    "is_bare_generic_concept_title",
     "is_generic_concept_page",
     "looks_like_person_name",
     "name_candidates",

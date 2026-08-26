@@ -2,6 +2,187 @@
 
 ---
 
+## [1.0.0-beta.7] - 2026-08-26
+
+### Fixed
+
+#### Text Extraction
+- `io/extractor.py`: `HTMLTextExtractor` no longer leaks MediaWiki-style
+  inline citation markers (e.g. Wikipedia's `<sup class="reference">
+  [3]</sup>`) into extracted text. Previously these superscript
+  footnote markers were extracted as ordinary body text, producing a
+  stray `[ 3 ]` fragment glued onto the start of indexed content and,
+  visibly, onto the start of quoted answer sentences (observed live on
+  the query "what is america?").
+  - Scoped narrowly to `<sup>` elements carrying a `reference`,
+    `cite-bracket`, or `citation` class, so ordinary superscript text
+    (e.g. a unit like "10^2 meters") is left untouched.
+
+#### Startup Crash
+- Removed the dependency on a separate `web/search_extra_providers.py`
+  module entirely. That split caused a real production crash: the
+  companion file existed on disk but was accidentally left empty, and
+  `search.py`'s top-level `from ... import search_brave, search_mojeek,
+  search_startpage` raised an `ImportError` before the application
+  could even start (`ImportError: cannot import name 'search_brave'
+  from 'brisart_ai.web.search_extra_providers'`). Every search provider
+  now lives directly in `web/search.py`, so there is nothing else that
+  needs to exist, nothing else that can be left blank, and nothing else
+  to keep in sync.
+
+#### Decoy / Off-Topic Search Results
+- `web/search.py`: replaced the whole-batch `_results_look_unrelated()`
+  guard with `_partition_related_results()`, which judges each
+  `(url, title)` result individually against the query instead of
+  asking "does *anything* in this batch match?" A single genuinely
+  unrelated result can no longer ride along inside an otherwise-good
+  batch.
+  - Observed live: a "2025 Tesla vandalism" Wikipedia page surfaced as
+    a source for "what is america?", and a "Nikola Tesla" page
+    surfaced for a Trump-legislation query -- in both cases sitting
+    next to 2-3 genuinely relevant results, which was enough for the
+    old whole-batch check to wave the entire batch through unfiltered.
+  - The original whole-batch safety valve is preserved as a fallback:
+    if partitioning would drop every single result in a batch, that is
+    still treated as a throttled/decoy provider response and the whole
+    batch is discarded so the next provider gets a chance.
+
+#### Ranking: Generic Words Winning on Title Match
+- `knowledge/ranker.py`: `title_match_adjust()` now dampens a fixed set
+  of generic instructional/question verbs (`GENERIC_QUERY_VERBS` --
+  "explain", "describe", "define", "summarize", etc.) so they
+  contribute at most 20% of what an equally-rare specific term
+  contributes to the title-match bonus.
+  - Root cause: title-match weighting used corpus rarity (IDF) alone.
+    In a small or freshly-crawled index, a generic word that happens to
+    appear in only one indexed document looks exactly as "rare" by IDF
+    as a genuinely specific term -- IDF cannot tell "explain" apart
+    from a person's surname when both have a document frequency of 1.
+  - Observed live: "explain who jason brisart is and where does he
+    live" surfaced a dictionary page titled "Understanding 'Explain' --
+    Meaning, Usage, and Examples" instead of the user's own indexed
+    research documents, purely because "explain" earned a full,
+    undamped title-match bonus.
+
+#### Ranking: Bare Generic-Concept Pages Outranking Specific Answers
+- `intent.py`: added `is_bare_generic_concept_title()`, which detects
+  when a document's title or URL-derived slug is nothing more than a
+  single bare abstract concept word (e.g. `"Law"` or `"Law -
+  Wikipedia"`), correctly stripping common `" - Site Name"` suffixes
+  before comparison. Extended the generic-concept vocabulary with
+  `law`, `legislation`, `politics`, and `government`.
+- `knowledge/ranker.py`: added `generic_concept_title_adjust()`, which
+  applies a fixed 0.35x penalty to any document matching the above,
+  applied unconditionally regardless of detected intent.
+  - Root cause: the existing generic-concept-page guard
+    (`is_generic_concept_page`, used for the "Invention"/"Invented
+    (album)" class of bug) only ever ran inside `score_intent()`,
+    which `ranker.py` skips entirely for `INTENT_GENERAL` queries. Any
+    ordinary question that didn't classify into one of the five
+    specific intents (founder/inventor/statistic/explanation/
+    comparison) silently received no protection at all.
+  - Observed live: "what laws have been passed since trump became
+    president" (classified `INTENT_GENERAL`) surfaced a bare
+    `"Law - Wikipedia"` page -- an article about the abstract concept
+    of law, not about any Trump-era legislation -- ahead of genuinely
+    relevant sources.
+
+#### Ranking: Long Articles Outranking Shorter, More Relevant Ones
+- `knowledge/ranker.py`: added BM25-style document-length
+  normalization (`LENGTH_NORM_B = 0.6`) to the base TF-IDF scoring
+  pass. Each term's raw contribution is now divided by a factor that
+  scales with how much longer than the corpus average a document is,
+  computed once per query via a single aggregate SQL query
+  (`_load_document_lengths()`).
+  - Root cause: raw term frequency has no way to distinguish "this
+    document is genuinely dense in this topic" from "this is an
+    extremely long, broad article that mentions this word a dozen
+    times in passing simply because it is long."
+  - Observed live: a previously-crawled, very long "South Africa -
+    Wikipedia" article (left over from an earlier, unrelated query in
+    the same session) surfaced as a source for a Trump/US-laws
+    question, because it happened to mention "president" and "law"
+    several times across its length.
+  - Verified this does not over-correct: a long document that is
+    genuinely dense in on-topic terms (high coverage, not just high
+    raw frequency) still outranks a shorter, less-detailed relevant
+    document, and a long off-topic document still ranks last despite
+    its raw term mass.
+
+### Added
+
+- `web/search.py` now includes three additional sequential fallback
+  providers -- **Startpage, Brave Search, and Mojeek** -- fully
+  self-contained in this single file.
+  - Result parsing for these three avoids hardcoded CSS class names.
+    Brave's own published scraping notes describe their markup as
+    "unlabeled" and something that "shift[s] often"; Startpage has no
+    stable public documentation of its markup either. Instead, results
+    are identified by domain heuristics (a result's host must differ
+    from the search engine's own host and must not be a
+    help/support/account/static subdomain of it), so the parser
+    degrades gracefully instead of silently breaking outright the next
+    time either site's markup changes.
+  - Includes a shared bot-challenge / consent-wall detector reused
+    across all three new providers.
+- **Provider chain reordered by block-risk, not by establishment.** The
+  full 7-provider chain now runs **Startpage → Brave Search →
+  DuckDuckGo HTML → DuckDuckGo Lite → Bing HTML → Mojeek → Wikipedia
+  API** -- from most likely to be blocked/challenged to least likely --
+  so the riskiest request is always spent first and each subsequent
+  provider is both a fallback for the ones before it and a strictly
+  safer bet in its own right. The Wikipedia API remains last as a
+  documented, stable, key-free floor on quality.
+
+### Verification
+
+- Re-ran the exact citation-marker repro from the live "what is
+  america?" session; confirmed `[ 3 ]` no longer appears in extracted
+  or displayed text.
+- Confirmed the merged, single-file `web/search.py` imports cleanly
+  with zero external dependency beyond its existing four imports
+  (`blocklist`, `util`, `web.fetcher`, `web.policy`), and re-verified
+  the full 7-provider risk-ordered fallback chain cascades correctly
+  end-to-end.
+- Re-ran the exact "what is america?" and "what laws have been passed
+  since trump became president" batches that previously surfaced the
+  Tesla-vandalism and Nikola-Tesla decoys; confirmed both are now
+  dropped individually while their genuinely relevant batch-mates are
+  kept.
+- Rebuilt the exact "Understanding 'Explain'" vs. Jason Brisart
+  research-document matchup and confirmed the research document now
+  wins.
+- Rebuilt the exact "Law - Wikipedia" vs. "Trump Administration
+  Accomplishments" matchup and confirmed the relevant page now wins
+  (6.44 vs. 0.32 in test scoring).
+- Rebuilt a long-vs-short South-Africa/Trump-laws matchup and confirmed
+  the short, relevant document now wins; separately confirmed a long
+  *and* genuinely relevant document still beats both a short relevant
+  document and a long irrelevant one.
+- Re-ran all prior beta.6 ranking regression cases (founder-intent
+  ordering, specific-term title-match credit, comparison-intent
+  classification) with zero regressions introduced by any of the fixes
+  in this release.
+
+### Known Limitations
+
+- The exact current HTML structure of Mojeek, Brave Search, and
+  Startpage has not been verified against a live fetch from outside
+  the development sandbox. If one of these providers returns zero
+  results against a query known to have results, it is likely serving
+  a challenge/consent page, or its markup has changed enough that the
+  generic domain-based extractor can no longer find outbound links.
+- The generic-concept-title vocabulary (`law`, `legislation`,
+  `politics`, `government`, etc.) is a small, fixed, hand-maintained
+  list; a bare-concept page whose topic word isn't yet in that list
+  will not receive this penalty.
+- Document-length normalization uses total indexed term count as a
+  proxy for document length, not a stored character/byte count; this
+  is consistent with the rest of the module's term-based arithmetic
+  but is an approximation.
+
+---
+
 ## [1.0.0-beta.6] 2026-08-26
 
 ### Added

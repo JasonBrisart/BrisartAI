@@ -1,31 +1,77 @@
 """Dependency-free public web search for BrisartAI.
 
-Searches multiple public endpoints without API keys:
+Searches multiple public endpoints without API keys, tried in order
+from MOST likely to be blocked/challenged to LEAST likely:
 
-1. DuckDuckGo HTML   (scraped)
-2. DuckDuckGo Lite   (scraped)
-3. Bing HTML         (scraped)
-4. Wikipedia API     (real JSON API, no key)
+1. Startpage         (scraped)  -- most aggressive bot-detection
+2. Brave Search       (scraped)  -- heavy bot-detection, unstable markup
+3. DuckDuckGo HTML    (scraped)  -- serves an explicit anti-bot challenge
+4. DuckDuckGo Lite    (scraped)  -- same family, historically more tolerant
+5. Bing HTML          (scraped)  -- rate-limits / decoy swaps, rarely a hard block
+6. Mojeek             (scraped)  -- historically scraper-tolerant
+7. Wikipedia API      (real JSON API, no key) -- essentially never blocked
 
 Providers are attempted in order. Only organic search-result links are
 extracted; results are normalized, deduplicated, and filtered before
 being returned to the crawler.
 
-The first three providers are HTML scrapers and therefore fragile: when
-they detect automated traffic, DuckDuckGo serves an anti-bot challenge
-and Bing rate-limits or substitutes an unrelated dictionary vertical. In
-that state every scraper returns zero results and a question would
-otherwise produce no sources at all. The Wikipedia API runs last as a
-floor on quality -- it is a documented, stable, key-free endpoint that
-keeps working under exactly those conditions, at the cost of covering
-only encyclopedic topics.
+Why ordered this way
+---------------------
+Every provider before the Wikipedia API is an HTML scraper and
+therefore fragile in a different way: Startpage and Brave apply the
+heaviest, least-documented bot-detection; DuckDuckGo answers automated
+traffic with an explicit "Unfortunately, bots use DuckDuckGo too"
+challenge page; Bing merely rate-limits or quietly substitutes an
+unrelated dictionary vertical rather than hard-blocking; and Mojeek has
+historically been the most scraper-tolerant of the six. Rather than
+trying the most-established providers first and only reaching for
+"backup" providers on failure, the chain is ordered so the request most
+likely to fail is spent first -- each subsequent provider is both a
+fallback for the ones before it AND a strictly safer bet in its own
+right. The Wikipedia API runs last as the floor on quality: a
+documented, stable, key-free endpoint that keeps working under exactly
+the conditions that break every scraper above it, at the cost of
+covering only encyclopedic topics.
 
 Dictionary/definition-site blocking uses the shared list in
 brisart_ai/blocklist.py, so search.py, crawler.py, and index.py all
 agree on which hosts to reject (previously each kept its own copy and
 they had drifted out of sync).
-"""
 
+Single-file design
+-------------------
+Every provider -- including Mojeek, Brave Search, and Startpage -- is
+implemented directly in this module rather than split across a
+companion file. That split previously caused a real startup crash: a
+second file (search_extra_providers.py) existed but was accidentally
+left empty, and search.py's top-level import of names from it raised
+an ImportError before the application could even start. Keeping every
+provider in one file means there is nothing else that needs to exist,
+nothing else that can be left blank, and nothing else to keep in sync.
+
+Per-result relatedness filtering
+-----------------------------------
+A live run surfaced a real failure mode this module did not previously
+guard against: a single garbage result riding along inside an otherwise
+good batch. For the query "what is america?", one provider's batch
+contained two genuinely on-topic Wikipedia/reference pages plus a
+"2025 Tesla vandalism" page that had nothing to do with the question.
+The previous whole-batch guard, ``_results_look_unrelated()``, only
+ever asked "does *any* result in this batch share a query term?" -- and
+since two of the three did, the entire batch (including the Tesla
+page) passed through untouched.
+
+``_partition_related_results()`` replaces that whole-batch check with
+per-result partitioning: each ``(url, title)`` pair is judged on its
+own against the query's meaningful terms, using only the raw URL/title
+text a search engine returned (before the page is ever fetched or
+indexed). A result with zero shared vocabulary is dropped individually;
+its batch-mates are unaffected. The original whole-batch safety valve
+is preserved as a special case -- if partitioning would drop every
+result, that is still treated as "this provider's response looks like
+a throttled or decoy batch" and the whole batch is discarded so the
+next provider gets a chance instead.
+"""
 from __future__ import annotations
 
 import base64
@@ -35,6 +81,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -46,6 +93,9 @@ from brisart_ai.web.policy import USER_AGENT
 DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/"
 DUCKDUCKGO_LITE_URL = "https://lite.duckduckgo.com/lite/"
 BING_SEARCH_URL = "https://www.bing.com/search"
+MOJEEK_SEARCH_URL = "https://www.mojeek.com/search"
+BRAVE_SEARCH_URL = "https://search.brave.com/search"
+STARTPAGE_SEARCH_URL = "https://www.startpage.com/sp/search"
 WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_ARTICLE_BASE = "https://en.wikipedia.org/wiki/"
 
@@ -76,6 +126,11 @@ _SEARCH_HOSTS = {
     "account.microsoft.com",
     "support.microsoft.com",
     "r.bing.com",
+    "mojeek.com",
+    "www.mojeek.com",
+    "search.brave.com",
+    "www.startpage.com",
+    "startpage.com",
 }
 
 _IGNORED_SCHEMES = (
@@ -90,6 +145,7 @@ _IGNORED_SCHEMES = (
 # also ask", related searches, or footer links. Grabbing every anchor on
 # a results page is what caused BrisartAI to ingest dictionary-definition
 # widgets (e.g. results for the word "many") instead of the real answers.
+
 _RESULT_LINK_CLASSES = (
     "result__a",       # DuckDuckGo HTML organic result title
     "result-link",     # DuckDuckGo Lite organic result title
@@ -98,10 +154,26 @@ _RESULT_LINK_CLASSES = (
 
 # Header tags that wrap organic result titles on providers (notably
 # Bing) where the result anchor itself carries no distinctive class.
+
 _RESULT_TITLE_TAGS = (
     "h2",
     "h3",
 )
+
+# Common English function words, used only to decide which query terms
+# are meaningful enough to judge result relatedness against (see
+# _partition_related_results()). Kept intentionally small: this is not
+# the same STOPWORDS list used for ranking weight in knowledge/ranker.py
+# -- it exists purely to filter query terms before a raw substring check
+# against a provider's returned URL/title text.
+FUNCTION_WORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+    "has", "have", "he", "her", "his", "how", "i", "in", "is", "it",
+    "its", "many", "me", "much", "my", "of", "on", "or", "our", "she",
+    "that", "the", "their", "them", "they", "this", "to", "was", "we",
+    "were", "what", "when", "where", "which", "who", "why", "will",
+    "with", "you", "your", "does", "did", "do", "give", "give me",
+}
 
 
 class _ResultLinkParser(HTMLParser):
@@ -296,46 +368,61 @@ def _looks_blocked(raw_text: str) -> bool:
     )
 
 
-def _results_look_unrelated(
+def _partition_related_results(
     query: str,
     results: Sequence[Tuple[str, str]],
-) -> bool:
-    """True when a provider's results share no vocabulary with the query.
+) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+    """Split provider results into (related, unrelated) result lists.
 
-    A rate-limited scraping provider does not always answer with an
-    obvious challenge page. Bing was observed returning well-formed
-    result HTML for an entirely unrelated query: "who invented the
-    transistor" came back as airline booking pages, "invented
-    transistor" as giraffe forum threads, and another run as bubble-sort
-    tutorials. :func:`_looks_blocked` cannot see this because the markup
-    is valid and parsing succeeds, so the junk reached the index looking
-    like genuine research sources.
+    Each ``(url, title)`` pair is judged independently against the
+    query's meaningful terms (four-or-more-letter words that are not
+    common function words). A result is kept if its URL or displayed
+    title shares at least one such term -- a deliberately low bar, since
+    the goal here is only to catch a wholesale topic mismatch (a page
+    that has nothing at all to do with the question), not to rank
+    on-topic results against each other; that job belongs to
+    knowledge/ranker.py once a page has actually been indexed.
 
-    The signal is that not one result -- URL or displayed title --
-    contains any meaningful term from the query. A single weak match is
-    enough to pass, so this stays conservative: it is meant to catch a
-    wholesale topic swap, not to second-guess ranking. Matching allows a
-    singular stem ("cats" -> "cat") so /wiki/Cat_behavior counts as
-    related to a query about cats. Batches are only judged when there
-    are enough results for a total absence of matches to be meaningful.
+    This replaces the previous whole-batch ``_results_look_unrelated()``
+    check, which only asked "does *any* result in this batch share a
+    query term?" -- a single good result was enough to wave an entire
+    batch through, including any garbage sitting alongside it. Observed
+    live: a "2025 Tesla vandalism" Wikipedia page surfaced as a source
+    for "what is america?" because it sat in a batch next to two
+    genuinely relevant pages; neither its URL nor its title contains
+    "america" at all, so per-result partitioning correctly drops it
+    while keeping its batch-mates.
+
+    Returns ``(related, unrelated)``. If ``query`` has no meaningful
+    terms (e.g. it's entirely function words), every result is treated
+    as related and ``unrelated`` is empty -- there is nothing meaningful
+    to judge against. Callers should treat an empty ``related`` list the
+    same way the old whole-batch check treated "fully unrelated": as
+    evidence of a throttled or decoy response, discarding the entire
+    batch and trying the next provider.
     """
-    from brisart_ai.blocklist import FUNCTION_WORDS
-
     terms = {
         word
         for word in re.findall(r"[a-z0-9]+", str(query or "").casefold())
         if len(word) > 3 and word not in FUNCTION_WORDS
     }
-    if not terms or len(results) < 3:
-        return False
-
+    if not terms:
+        return list(results), []
+    related: List[Tuple[str, str]] = []
+    unrelated: List[Tuple[str, str]] = []
     for url, title in results:
         haystack = f"{url} {title}".casefold()
+        matched = False
         for term in terms:
             stem = term.rstrip("s")
             if term in haystack or (len(stem) >= 3 and stem in haystack):
-                return False
-    return True
+                matched = True
+                break
+        if matched:
+            related.append((url, title))
+        else:
+            unrelated.append((url, title))
+    return related, unrelated
 
 
 def _is_search_host(hostname: str) -> bool:
@@ -674,6 +761,403 @@ def _search_bing_html(
     )
 
 
+# -----------------------------------------------------------------------
+# Mojeek / Brave Search / Startpage
+# -----------------------------------------------------------------------
+# These three providers are implemented directly in this file (see the
+# "Single-file design" section of the module docstring for why there is
+# no separate search_extra_providers.py module).
+#
+# Why a generic, markup-agnostic result extractor
+# -------------------------------------------------
+# Brave's own published scraping notes describe their result markup as
+# "unlabeled" and something that "shift[s] often"; Startpage has no
+# stable public documentation of its markup either. Hardcoding today's
+# CSS class names for either site would mean the very next markup
+# change silently breaks the provider with no warning. Mojeek's markup
+# is comparatively simple and stable, but is treated the same way here
+# for consistency and to avoid three different parsing strategies.
+#
+# Instead, _extract_result_links() below identifies likely result links
+# using domain-based heuristics that are far less sensitive to markup
+# churn than a hand-tuned per-site selector:
+#   * The link's host must differ from the search engine's own host
+#     (so internal nav/settings/about/privacy links are excluded
+#     without needing to know what class wraps them).
+#   * The link must not point at the search engine's own static asset,
+#     help, or account domains (a small denylist covers the common
+#     cases: help.*, support.*, accounts.*, etc.).
+#   * A short run of plain text immediately following the link is used
+#     as the snippet, which works regardless of what div/span wrapper
+#     surrounds it.
+#
+# This is not as precise as a hand-tuned per-site scraper on the day
+# it's written, but it is meant to keep working -- in a degraded,
+# "still gets titles and URLs, maybe a rougher snippet" way -- after
+# the next markup change, rather than silently returning nothing.
+#
+# IMPORTANT -- verify before relying on this
+# --------------------------------------------
+# The exact current HTML structure of Mojeek, Brave Search, and
+# Startpage has not been verified against a live fetch. If one of these
+# providers returns zero results against a query you know has results,
+# that provider is likely serving a challenge/consent page instead of
+# results, or its markup has changed enough that even the generic
+# extractor below can no longer find outbound links.
+
+# Domains/path fragments that indicate a link is part of the search
+# engine's own site chrome rather than an actual result -- help pages,
+# account/login flows, static assets, and the engine's own homepage.
+# This denylist is intentionally small and generic (not the primary
+# defense) since the primary defense is simply "different host than
+# the engine we just queried".
+_CHROME_HOST_FRAGMENTS: Tuple[str, ...] = (
+    "help.",
+    "support.",
+    "accounts.",
+    "account.",
+    "login.",
+    "static.",
+    "cdn.",
+    "assets.",
+)
+
+# Phrases that strongly suggest a fetched page is a bot-challenge or
+# consent wall rather than a results page. Checked against a
+# lowercased prefix of the raw HTML, so this works even when the
+# result-parsing heuristics below find zero links (a challenge page
+# often has no external links at all).
+_CHALLENGE_MARKERS: Tuple[str, ...] = (
+    "verify you are human",
+    "unusual traffic",
+    "are you a robot",
+    "captcha",
+    "access denied",
+    "attention required",
+    "checking your browser",
+    "cf-challenge",
+    "before you continue",
+    "consent.google",
+    "please enable cookies",
+)
+
+
+@dataclass
+class WebResult:
+    """One normalized search result from an extra provider.
+
+    Kept as a small dataclass (rather than a bare tuple) purely for
+    readability at the call sites below; results are converted to this
+    module's plain ``(url, title)`` tuple contract via
+    :func:`_adapt_extra_provider` before being merged with the other
+    providers.
+    """
+
+    title: str
+    url: str
+    snippet: str = ""
+
+
+@dataclass
+class ProviderOutcome:
+    """Result of one extra-provider attempt, with a debug note.
+
+    ``results`` is empty on any failure path (network error, challenge
+    page, or zero parsed results); callers should treat an empty list
+    as "fall through to the next provider" exactly like the existing
+    DuckDuckGo HTML/Lite handling does. ``debug_note`` is meant for a
+    WARN/print line, not for the end user.
+    """
+
+    results: List[WebResult] = field(default_factory=list)
+    debug_note: str = ""
+
+
+class _ResultLinkTextParser(HTMLParser):
+    """Generic, markup-agnostic search-result link extractor.
+
+    Collects every outbound ``<a href>`` together with the plain text
+    inside that anchor tag (as a title candidate) and a short run of
+    plain text that follows it before the next anchor (as a snippet
+    candidate). Filtering out which of these are genuine results
+    happens afterward in :func:`_extract_result_links`, not here -- this
+    class only records raw candidates.
+
+    Named distinctly from ``_ResultLinkParser`` above (which is scoped
+    to DuckDuckGo/Bing's known result classes) to avoid any confusion
+    between the two different extraction strategies used in this file.
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._depth_in_skip = 0
+        self.candidates: List[Tuple[str, str, str]] = []
+        self._pending_href: Optional[str] = None
+        self._pending_title = ""
+        self._current_title_parts: List[str] = []
+        self._trailing_text_parts: List[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() == "a":
+            href = dict(attrs).get("href")
+            if self._pending_href is not None:
+                self._flush_pending()
+            self._pending_href = href
+            self._current_title_parts = []
+        elif tag.lower() in ("script", "style", "noscript"):
+            self._depth_in_skip += 1
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._pending_href is not None:
+            self._pending_title = " ".join(self._current_title_parts).strip()
+        if tag.lower() in ("script", "style", "noscript"):
+            if self._depth_in_skip > 0:
+                self._depth_in_skip -= 1
+
+    def handle_data(self, data):
+        if self._depth_in_skip:
+            return
+        cleaned = re.sub(r"\s+", " ", data).strip()
+        if not cleaned:
+            return
+        if self._pending_href is not None and not self._pending_title:
+            self._current_title_parts.append(cleaned)
+        else:
+            self._trailing_text_parts.append(cleaned)
+        if len(self._trailing_text_parts) > 40:
+            self._flush_pending()
+
+    def _flush_pending(self):
+        if self._pending_href:
+            snippet = " ".join(self._trailing_text_parts[:40]).strip()
+            self.candidates.append(
+                (self._pending_href, self._pending_title, snippet)
+            )
+        self._pending_href = None
+        self._pending_title = ""
+        self._trailing_text_parts = []
+
+    def close(self):
+        self._flush_pending()
+        super().close()
+
+
+def _looks_like_challenge_page(raw_html: str) -> bool:
+    """Heuristically detect a bot-challenge/consent page."""
+    prefix = raw_html[:4000].casefold()
+    return any(marker in prefix for marker in _CHALLENGE_MARKERS)
+
+
+def _is_chrome_link(candidate_host: str, engine_host: str) -> bool:
+    """True when a link is the engine's own site chrome, not a result."""
+    if not candidate_host:
+        return True
+    if candidate_host == engine_host or candidate_host.endswith(
+        "." + engine_host
+    ):
+        return True
+    return any(
+        fragment in candidate_host for fragment in _CHROME_HOST_FRAGMENTS
+    )
+
+
+def _extract_result_links(
+    raw_html: str,
+    engine_host: str,
+    limit: int,
+) -> List[WebResult]:
+    """Pull likely external result links out of a fetched results page.
+
+    See the module comment above for why this avoids hardcoded CSS
+    selectors. Deduplicates by URL and stops once ``limit`` results
+    have been collected.
+    """
+    parser = _ResultLinkTextParser()
+    try:
+        parser.feed(raw_html)
+        parser.close()
+    except Exception:
+        return []
+
+    results: List[WebResult] = []
+    seen_urls = set()
+    for href, title, snippet in parser.candidates:
+        if not href or not href.startswith(("http://", "https://")):
+            continue
+        parsed = urllib.parse.urlparse(href)
+        host = parsed.netloc.casefold()
+        if _is_chrome_link(host, engine_host):
+            continue
+        normalized_url = href.split("#", 1)[0]
+        if normalized_url in seen_urls:
+            continue
+        display_title = title.strip() or host
+        if len(display_title) < 2:
+            continue
+        seen_urls.add(normalized_url)
+        results.append(
+            WebResult(
+                title=display_title,
+                url=normalized_url,
+                snippet=snippet.strip(),
+            )
+        )
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _fetch_extra_provider(url: str) -> str:
+    """Fetch a URL's raw HTML with a realistic browser User-Agent."""
+    request = urllib.request.Request(
+        url,
+        headers=_request_headers(),
+    )
+    with urllib.request.urlopen(
+        request, timeout=REQUEST_TIMEOUT
+    ) as response:
+        raw_bytes = response.read(MAX_PAGE_BYTES + 1)
+    if len(raw_bytes) > MAX_PAGE_BYTES:
+        raise ValueError("search response exceeded maximum size")
+    return raw_bytes.decode("utf-8", errors="replace")
+
+
+def _run_extra_provider(
+    provider_label: str,
+    search_url: str,
+    engine_host: str,
+    limit: int,
+) -> ProviderOutcome:
+    """Shared fetch/challenge-detect/parse flow for one extra provider."""
+    try:
+        raw_html = _fetch_extra_provider(search_url)
+    except urllib.error.HTTPError as exc:
+        return ProviderOutcome(
+            debug_note=(
+                f"WARN: {provider_label} returned HTTP {exc.code}."
+            )
+        )
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return ProviderOutcome(
+            debug_note=f"WARN: {provider_label} request failed ({exc})."
+        )
+    except ValueError as exc:
+        return ProviderOutcome(
+            debug_note=f"WARN: {provider_label} request failed ({exc})."
+        )
+
+    if _looks_like_challenge_page(raw_html):
+        return ProviderOutcome(
+            debug_note=(
+                f"WARN: {provider_label} returned a challenge or "
+                "consent page."
+            )
+        )
+
+    results = _extract_result_links(raw_html, engine_host, limit)
+    if not results:
+        return ProviderOutcome(
+            debug_note=(
+                f"WARN: {provider_label} returned no usable results "
+                f"(fetched {len(raw_html)} chars)."
+            )
+        )
+    return ProviderOutcome(
+        results=results,
+        debug_note=(
+            f"{provider_label}: {len(results)} result(s) parsed."
+        ),
+    )
+
+
+def _mojeek_provider(query: str, limit: int = 5) -> ProviderOutcome:
+    """Search Mojeek (mojeek.com), an independent, script-light index."""
+    encoded_query = urllib.parse.quote_plus(query)
+    search_url = f"{MOJEEK_SEARCH_URL}?q={encoded_query}"
+    return _run_extra_provider("Mojeek", search_url, "www.mojeek.com", limit)
+
+
+def _brave_provider(query: str, limit: int = 5) -> ProviderOutcome:
+    """Search Brave Search (search.brave.com). High risk of blocking."""
+    encoded_query = urllib.parse.quote_plus(query)
+    search_url = f"{BRAVE_SEARCH_URL}?q={encoded_query}"
+    return _run_extra_provider(
+        "Brave Search", search_url, "search.brave.com", limit
+    )
+
+
+def _startpage_provider(query: str, limit: int = 5) -> ProviderOutcome:
+    """Search Startpage (startpage.com). Highest risk of blocking."""
+    encoded_query = urllib.parse.quote_plus(query)
+    search_url = f"{STARTPAGE_SEARCH_URL}?query={encoded_query}"
+    return _run_extra_provider(
+        "Startpage", search_url, "www.startpage.com", limit
+    )
+
+
+def _adapt_extra_provider(
+    provider_fn,
+    query: str,
+    limit: int,
+) -> List[Tuple[str, str]]:
+    """Bridge a Mojeek/Brave/Startpage provider into this module's
+    (url, title) tuple contract.
+
+    Every result is re-run through :func:`_normalize_result_url` so
+    Mojeek/Brave/Startpage results get the exact same tracking-parameter
+    stripping, search-host filtering, and dictionary/definition
+    blocklist check (``is_blocked_web_host``) that DuckDuckGo/Bing/
+    Wikipedia results already receive.
+    """
+    outcome = provider_fn(query, limit=limit)
+    if outcome.debug_note and not outcome.results:
+        print(outcome.debug_note)
+    if not outcome.results:
+        return []
+    normalized: List[Tuple[str, str]] = []
+    for result in outcome.results:
+        cleaned_url = _normalize_result_url(result.url, result.url)
+        if cleaned_url:
+            normalized.append((cleaned_url, result.title))
+    return normalized
+
+
+def _search_startpage(
+    query: str,
+    limit: int,
+) -> List[Tuple[str, str]]:
+    """Search Startpage. Tried first: the most aggressive bot-detection
+    and least-documented markup of any provider in the chain, so its
+    (likely) failure is spent before any more reliable provider.
+    """
+    return _adapt_extra_provider(_startpage_provider, query, limit)
+
+
+def _search_brave(
+    query: str,
+    limit: int,
+) -> List[Tuple[str, str]]:
+    """Search Brave Search. Tried second (very early), since it applies
+    heavier bot-detection and has undocumented, frequently-changing
+    result markup -- one of the two riskiest providers in the chain.
+    """
+    return _adapt_extra_provider(_brave_provider, query, limit)
+
+
+def _search_mojeek(
+    query: str,
+    limit: int,
+) -> List[Tuple[str, str]]:
+    """Search Mojeek, an independent, scraper-friendly index.
+
+    Placed second-to-last in the provider chain: Mojeek maintains its
+    own crawl (not a Bing/Google reseller) and has historically been the
+    most scraper-tolerant of the six HTML providers, but its markup was
+    not verified against a live fetch during development.
+    """
+    return _adapt_extra_provider(_mojeek_provider, query, limit)
+
+
 def _search_wikipedia_api(
     query: str,
     limit: int,
@@ -681,22 +1165,10 @@ def _search_wikipedia_api(
     """Search Wikipedia through its documented public JSON API.
 
     This provider exists because every HTML-scraping provider above is a
-    single anti-bot policy change away from returning nothing: DuckDuckGo
-    answers automated requests with an "Unfortunately, bots use
-    DuckDuckGo too" challenge page, and Bing rate-limits and can swap
-    organic results for an unrelated dictionary vertical. When that
-    happens to all of them at once, BrisartAI previously reported "no
-    usable results" and indexed nothing at all.
-
-    ``action=query&list=search`` is a real, stable, key-free API rather
-    than a scraped page, so it keeps working under exactly the conditions
-    that break the scrapers. It only covers encyclopedic topics, which is
-    why it runs last -- as a floor on quality, not a replacement for
-    general web search.
-
-    Wikipedia's API asks for a descriptive User-Agent identifying the
-    client, so this request deliberately uses the honest BrisartAI agent
-    instead of the browser string used for the scraping providers.
+    single anti-bot policy change away from returning nothing. It runs
+    last as a floor on quality -- a documented, stable, key-free
+    endpoint that keeps working under exactly the conditions that break
+    the scrapers, at the cost of covering only encyclopedic topics.
     """
     request_url = WIKIPEDIA_API_URL + "?" + urllib.parse.urlencode(
         {
@@ -746,7 +1218,6 @@ def _search_wikipedia_api(
             f"WARN: Wikipedia API request failed: {exc}"
         )
         return []
-
     try:
         matches = payload["query"]["search"]
     except (KeyError, TypeError):
@@ -754,7 +1225,6 @@ def _search_wikipedia_api(
             "WARN: Wikipedia API response contained no search results."
         )
         return []
-
     candidates: List[Tuple[str, str]] = []
     for match in matches:
         if not isinstance(match, dict):
@@ -799,6 +1269,19 @@ def search_public_web(
     except (TypeError, ValueError):
         result_limit = 5
     providers = (
+        # Ordered from MOST likely to be blocked/challenged to LEAST
+        # likely, so the riskiest request is spent first and each
+        # subsequent provider is both a fallback for the ones before it
+        # and a strictly safer bet. See the module docstring for the
+        # full reasoning behind this ordering.
+        (
+            "Startpage",
+            _search_startpage,
+        ),
+        (
+            "Brave Search",
+            _search_brave,
+        ),
         (
             "DuckDuckGo HTML",
             _search_duckduckgo_html,
@@ -811,8 +1294,12 @@ def search_public_web(
             "Bing HTML",
             _search_bing_html,
         ),
-        # Runs last: a key-free real API that still works when the
-        # scraping providers above are challenged or rate-limited, so a
+        (
+            "Mojeek",
+            _search_mojeek,
+        ),
+        # Runs last: a key-free real API that still works when every
+        # scraping provider above is challenged or rate-limited, so a
         # question returns encyclopedic sources instead of nothing.
         (
             "Wikipedia API",
@@ -842,7 +1329,10 @@ def search_public_web(
                 f"WARN: {provider_name} returned no usable results."
             )
             continue
-        if _results_look_unrelated(cleaned_query, provider_results):
+        related_results, unrelated_results = _partition_related_results(
+            cleaned_query, provider_results
+        )
+        if not related_results:
             print(
                 f"WARN: {provider_name} returned {len(provider_results)} "
                 "result(s) unrelated to the query (likely a throttled or "
@@ -850,6 +1340,14 @@ def search_public_web(
                 "provider."
             )
             continue
+        if unrelated_results:
+            print(
+                f"WARN: {provider_name} returned {len(unrelated_results)} "
+                f"result(s) with no shared vocabulary with the query out "
+                f"of {len(provider_results)} total; dropping just those "
+                f"and keeping the other {len(related_results)}."
+            )
+        provider_results = related_results
         print(
             f"WEB SEARCH: {provider_name} returned "
             f"{len(provider_results)} usable result(s)."
