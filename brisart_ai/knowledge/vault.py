@@ -11,6 +11,13 @@ It provides:
 - vault reports
 
 Everything is pure Python and uses the existing BrisartAI SQLite database.
+
+Notes are mirrored into the main source index (source_type="note") so
+they are ranked with the exact same TF-IDF, coverage, title-match,
+phrase-match, and intent-aware model used for imported files and
+crawled web pages, instead of the separate, much cruder substring-count
+scan this module used to rely on exclusively. See ``_index_note()`` and
+``reindex_missing_notes()`` below.
 """
 from __future__ import annotations
 
@@ -183,8 +190,71 @@ def add_sources_to_collection(index, collection_name: str, query: str) -> str:
     )
 
 
+def _index_note(index, note_id: int, title: str, body: str) -> None:
+    """Mirror a saved note into the main source index as a ranked source.
+
+    Notes previously lived only in the vault's own ``notes`` table and
+    were reachable only through ``search_notes_as_documents()``'s ad hoc
+    substring-count scan, which bypassed TF-IDF weighting, coverage
+    scoring, title/phrase matching, and intent-aware ranking entirely.
+    Indexing the note here means a saved note now competes for ranking
+    exactly like an imported file or crawled web page -- through
+    ``knowledge/ranker.search()`` -- while still being gated by the same
+    ``search_notes`` setting in ``core/conversation.py``. The location
+    ``note:<id>`` is stable, so re-adding never creates duplicate index
+    rows (``Index.add_source`` upserts by source_key).
+    """
+    location = f"note:{note_id}"
+    index.add_source(
+        source_type="note",
+        location=location,
+        title=title,
+        text=body,
+        size_bytes=len(body.encode("utf-8", errors="replace")),
+        extension="",
+    )
+
+
+def reindex_missing_notes(index) -> int:
+    """Ensure every saved note is mirrored into the main source index.
+
+    Notes saved before note-mirroring existed (or written by any older
+    build) are present only in the ``notes`` table and invisible to
+    ``knowledge/ranker.search()``. Called once at service startup
+    (``ui/service.py``), this walks all saved notes and indexes any that
+    are missing, so existing notes silently gain full ranked search the
+    next time the app runs -- no re-saving, no new setting, nothing for
+    the user to do.
+    """
+    init_vault_schema(index)
+    rows = index.conn.execute("SELECT id, title, body FROM notes").fetchall()
+    reindexed = 0
+    for note_id, title, body in rows:
+        location = f"note:{note_id}"
+        existing = index.conn.execute(
+            """
+            SELECT 1
+            FROM sources
+            WHERE source_type = 'note' AND location = ?
+            LIMIT 1
+            """,
+            (location,),
+        ).fetchone()
+        if existing is None:
+            _index_note(index, note_id, title, body)
+            reindexed += 1
+    return reindexed
+
+
 def add_note(index, title: str, body: str, collection_name: str = "") -> str:
-    """Add a local research note."""
+    """Add a local research note.
+
+    The note is saved to the vault's own ``notes`` table (the source of
+    truth for ``list_notes()``/``search_notes()`` and any future
+    per-note UI), and is also mirrored into the main source index via
+    ``_index_note()`` so it immediately participates in ranked search
+    alongside files and web pages.
+    """
     init_vault_schema(index)
     cid = None
     if collection_name.strip():
@@ -196,13 +266,15 @@ def add_note(index, title: str, body: str, collection_name: str = "") -> str:
         return "Note body cannot be empty."
     stamp = now_ts()
     with index.conn:
-        index.conn.execute(
+        cursor = index.conn.execute(
             """
             INSERT INTO notes(title, body, collection_id, created_at, updated_at)
             VALUES(?,?,?,?,?)
             """,
             (cleaned_title, cleaned_body, cid, stamp, stamp),
         )
+        note_id = cursor.lastrowid
+    _index_note(index, note_id, cleaned_title, cleaned_body)
     return f"Note saved: {cleaned_title}"
 
 
@@ -237,7 +309,14 @@ def list_notes(index, limit: int = 20) -> str:
 
 
 def search_notes(index, query: str, limit: int = 10) -> str:
-    """Search local notes and return a human-readable report."""
+    """Search local notes and return a human-readable report.
+
+    This remains a simple substring/count scan over the ``notes`` table
+    directly, independent of ``knowledge/ranker.search()``. It exists for
+    quick, dependency-free note lookups (e.g. a future ``/notes`` command)
+    and is not used by the main conversation pipeline, which searches
+    notes through the fully-ranked path instead (see ``_index_note()``).
+    """
     init_vault_schema(index)
     terms = tokenize(query)
     if not terms:
@@ -278,18 +357,16 @@ def search_notes_as_documents(
     query: str,
     limit: int = 10,
 ) -> List[Dict[str, object]]:
-    """Return matching notes as document dicts compatible with the ranker.
+    """Return matching notes as document dicts, via simple substring scoring.
 
-    Notes live in the vault's own ``notes`` table, separate from the
-    file/web source index used by ``knowledge/ranker.search()``. This
-    bridges that gap so notes can be merged into the same answer
-    pipeline as files and web pages, gated by the ``search_notes``
-    setting in ``core/conversation.py``. Each returned document uses the
-    same field shape as ``ranker.search()`` results (``id``, ``score``,
-    ``source_type``, ``location``, ``title``, ``text``, ``extension``,
-    ``size_bytes``, ``indexed_at``, ``intent``, ``intent_boosts``,
-    ``intent_penalties``) so ``knowledge/synthesizer.synthesize()`` can
-    consume a merged list without caring where each document came from.
+    Legacy path: this predates note-mirroring (see ``_index_note()``) and
+    is kept only for direct/CLI callers that want a lightweight,
+    dependency-free note search without touching the main ranked index.
+    The main conversation pipeline (``core/conversation.py``) no longer
+    uses this -- notes are now indexed as ``source_type="note"`` rows and
+    searched through ``knowledge/ranker.search()`` instead, which gives
+    them the same TF-IDF, coverage, title-match, phrase-match, and
+    intent-aware treatment as files and web pages.
     """
     init_vault_schema(index)
     terms = tokenize(query)
@@ -432,6 +509,7 @@ def vault_report(index, top_entities: int = 25) -> str:
     total_sources = index.source_count()
     local_files = index.source_count("file")
     web_pages = index.source_count("web")
+    note_sources = index.source_count("note")
     collection_count = index.conn.execute(
         "SELECT COUNT(*) FROM collections"
     ).fetchone()[0]
@@ -471,6 +549,7 @@ def vault_report(index, top_entities: int = 25) -> str:
     lines.append(f"Indexed sources: {total_sources}")
     lines.append(f"Local files: {local_files}")
     lines.append(f"Web pages: {web_pages}")
+    lines.append(f"Notes (ranked): {note_sources}")
     lines.append(f"Collections: {collection_count}")
     lines.append(f"Notes: {note_count}")
     lines.append(f"Known entities: {entity_count}")
@@ -561,6 +640,7 @@ __all__ = [
     "init_vault_schema",
     "list_collections",
     "list_notes",
+    "reindex_missing_notes",
     "rebuild_entities",
     "search_notes",
     "search_notes_as_documents",

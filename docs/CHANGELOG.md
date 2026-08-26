@@ -2,6 +2,94 @@
 
 ---
 
+## [1.0.0-beta.6] 2026-08-26
+
+### Added
+- Title-match ranking signal in `knowledge/ranker.py`. A document whose
+  own title contains meaningful query terms now receives an explicit
+  score multiplier (up to 1.42x), separate from ordinary TF-IDF credit.
+  Previously a term appearing once in a short, on-topic title counted
+  for no more than the same term buried once in a large, mostly
+  unrelated body -- title matches are much stronger relevance evidence
+  and are now rewarded as such.
+- Phrase-match ranking signal in `knowledge/ranker.py`. When the literal
+  query text appears as a contiguous phrase anywhere in a document's
+  title, location, or body, the score receives a flat 1.35x multiplier.
+  Bag-of-words TF-IDF scoring is blind to word order and adjacency, so a
+  search for an exact note title or quoted phrase previously got no
+  more credit than a document containing the same words scattered far
+  apart. Only applies to multi-word queries; a single meaningful word
+  already gets full credit from ordinary term scoring.
+- `knowledge/vault.reindex_missing_notes()`, which walks all saved notes
+  at startup and indexes any that predate note-mirroring (see below).
+  Existing notes silently gain full ranked search the next time the app
+  runs -- no re-saving, no new setting, nothing for the user to do.
+- `knowledge/ranker.search()` now accepts an optional `source_types`
+  parameter (a set of allowed source types, e.g. `{"web", "file",
+  "note"}`), used to combine multiple source kinds into a single ranked
+  query. The prior single-value `source_type` parameter is unchanged and
+  still supported for existing callers.
+
+### Changed
+- `knowledge/vault.add_note()` now mirrors every saved note into the
+  main `sources` index (`source_type="note"`) in addition to the
+  vault's own `notes` table. Notes are no longer a second-class,
+  separately-scored data source -- they now receive the exact same
+  TF-IDF, coverage, title-match, phrase-match, and intent-aware ranking
+  as imported files and crawled web pages.
+- `core/conversation.py` no longer merges notes into results via a
+  separate substring-count pass. `build_conversation_answer()` now
+  builds one `source_types` set from the existing `search_local_files`
+  and `search_notes` settings (`web` is always included, `file` and
+  `note` are added per-toggle) and passes it directly to
+  `knowledge/ranker.search()`, so all local evidence is scored through
+  one unified ranking model instead of two different ones.
+- `ui/service.py` calls `reindex_missing_notes()` once during
+  `BrisartService.__init__()`, alongside the existing stale-web-source
+  cleanup, and logs how many notes were backfilled.
+
+### Notes API (unchanged surface, updated behavior)
+- `knowledge/vault.search_notes()` and `search_notes_as_documents()` are
+  retained as lightweight, dependency-free substring-search helpers for
+  direct/CLI callers, but are no longer used by the main conversation
+  pipeline. They are documented in-source as the legacy path.
+
+### Verification
+- Confirmed a title-matching document ranks above a longer, non-titled
+  document containing the same query terms (new title-match signal).
+- Confirmed a document containing the literal query phrase ranks above
+  a document containing the same words non-contiguously (new
+  phrase-match signal).
+- Confirmed a note inserted directly into the `notes` table (simulating
+  a pre-beta.6 save) is invisible to ranked search until
+  `reindex_missing_notes()` runs, then becomes fully ranked with zero
+  user action.
+- Confirmed a note added through the current `add_note()` is
+  immediately ranked with no reindex step required.
+- Confirmed the settings surface is unchanged: exactly the same 3
+  toggles as beta.5 (`search_local_files`, `search_notes`,
+  `auto_web_research`); no new toggle was introduced.
+- Confirmed `search_notes` on/off still fully gates whether notes
+  surface in an answer, end-to-end through
+  `core.conversation.build_conversation_answer()`.
+- Re-ran the founder-intent regression case ("who invented microsoft?")
+  to confirm the new title-match and phrase-match signals compose
+  correctly with the existing intent-aware layer and do not regress it;
+  "History of Microsoft" still outranks "Microsoft PowerPoint."
+- Confirmed the legacy single-value `source_type` parameter on
+  `ranker.search()` (e.g. `source_type="web"`) still works unchanged.
+
+### Known Limitations
+- Phrase-match detection is a literal substring check after punctuation
+  normalization; it does not account for synonyms, stemming, or word
+  reordering within the phrase.
+- Title-match and phrase-match bonuses are applied uniformly regardless
+  of detected intent; they are not currently intent-scoped the way
+  boost/penalty vocabulary is.
+- Collections and entity extraction remain implemented in
+  `knowledge/vault.py` but are still not exposed through the desktop UI
+  (carried forward from earlier releases).
+
 ## [1.0.0-beta.5] 2026-08-26
 
 ### Added

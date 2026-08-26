@@ -6,11 +6,14 @@ and any future interface share the exact same backend logic (ingestion,
 search, settings, notes, etc.) instead of duplicating it.
 
 Notes are stored through knowledge/vault.py's add_note()/list_notes()/
-search_notes() helpers. Notes live in the vault's own notes table and
-are surfaced with list_notes()/search_notes(); they are separate from
-the file/web source index used by the main ask() pipeline. Collections,
-entity extraction, and timeline features from vault.py are intentionally
-not wired in here to keep the surface area small.
+search_notes() helpers, and are also mirrored into the main source
+index by add_note() itself so they participate in fully-ranked search
+via core/conversation.py. Notes saved before that mirroring existed are
+brought up to date once at startup via reindex_missing_notes(), so
+existing notes gain ranked search automatically with nothing for the
+user to do. Collections, entity extraction, and timeline features from
+vault.py are intentionally not wired in here to keep the surface area
+small.
 """
 from __future__ import annotations
 
@@ -24,7 +27,12 @@ from brisart_ai.core.session_memory import SessionMemory
 from brisart_ai.core.settings import ResearchSettings, TOGGLE_LABELS
 from brisart_ai.knowledge.index import DEFAULT_DB, Index
 from brisart_ai.knowledge.ingest import ingest_paths
-from brisart_ai.knowledge.vault import add_note, list_notes, search_notes
+from brisart_ai.knowledge.vault import (
+    add_note,
+    list_notes,
+    reindex_missing_notes,
+    search_notes,
+)
 from brisart_ai.web.crawler import web_search_and_ingest
 
 # Diagnostic lines are only worth surfacing to the user if they contain
@@ -48,6 +56,14 @@ class BrisartService:
             print(
                 f"Startup cleanup: removed {removed} stale "
                 "dictionary/definition page(s) from the index."
+            )
+        # Bring any notes saved before note-mirroring existed up to date,
+        # so previously-saved notes silently gain full ranked search too.
+        reindexed = reindex_missing_notes(self.index)
+        if reindexed:
+            print(
+                f"Startup cleanup: indexed {reindexed} previously "
+                "unindexed note(s) for ranked search."
             )
         self.memory = SessionMemory(db_path)
         self.settings = ResearchSettings()

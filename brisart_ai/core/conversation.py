@@ -20,7 +20,6 @@ from brisart_ai.core.settings import ResearchSettings
 from brisart_ai.io.input_cleaner import normalize_shellish_input
 from brisart_ai.knowledge.ranker import search
 from brisart_ai.knowledge.synthesizer import synthesize
-from brisart_ai.knowledge.vault import search_notes_as_documents
 from brisart_ai.web.crawler import web_search_and_ingest
 
 
@@ -45,40 +44,38 @@ def build_conversation_answer(
     evidence is used first, and the public web is only searched when no
     local evidence is found and ``auto_web_research`` is enabled.
 
-    The ``search_local_files`` setting controls whether imported files
-    are included in local search (previously indexed web pages remain
-    searchable either way, so the local index never goes completely
-    silent just because this toggle is off). The ``search_notes``
-    setting controls whether saved vault notes are merged into the
-    local evidence pool; notes live in a separate table from the main
-    source index (see ``knowledge/vault.py``), so this is a real merge
-    of two result sets rather than a query filter.
+    Local search is scoped by the ``search_local_files`` and
+    ``search_notes`` settings via an explicit set of allowed source
+    types passed to ``knowledge/ranker.search()``:
+      * ``web`` is always included, so previously indexed web pages
+        remain searchable regardless of the Local Files setting -- the
+        local index never goes completely silent just because that
+        toggle is off.
+      * ``file`` is included only when ``search_local_files`` is on.
+      * ``note`` is included only when ``search_notes`` is on. Saved
+        notes are mirrored into the main source index by
+        ``knowledge/vault.add_note()``/``reindex_missing_notes()``, so
+        including "note" here gives them the exact same TF-IDF,
+        coverage, title-match, phrase-match, and intent-aware ranking
+        as files and web pages -- rather than the separate, cruder
+        substring-count merge used previously.
     """
     cleaned = normalize_shellish_input(query)
     recent = memory.recent_topics(limit=4)
 
-    include_local_files = (
-        settings is None or settings.get("search_local_files")
-    )
-    source_type_filter = None if include_local_files else "web"
-    include_notes = bool(settings is not None and settings.get("search_notes"))
+    allowed_source_types = {"web"}
+    if settings is None or settings.get("search_local_files"):
+        allowed_source_types.add("file")
+    if settings is not None and settings.get("search_notes"):
+        allowed_source_types.add("note")
 
     def _gather_docs():
-        found = search(
+        return search(
             index,
             cleaned,
             limit=limit,
-            source_type=source_type_filter,
+            source_types=allowed_source_types,
         )
-        if include_notes:
-            note_docs = search_notes_as_documents(index, cleaned, limit=limit)
-            if note_docs:
-                found = sorted(
-                    found + note_docs,
-                    key=lambda doc: doc.get("score", 0.0),
-                    reverse=True,
-                )[:limit]
-        return found
 
     docs = _gather_docs()
 
