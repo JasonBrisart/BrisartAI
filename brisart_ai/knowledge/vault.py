@@ -16,7 +16,7 @@ Everything is pure Python and uses the existing BrisartAI SQLite database.
 from __future__ import annotations
 
 import re
-from typing import Iterable, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from brisart_ai.util import now_ts, tokenize
 
