@@ -33,5 +33,4 @@ FONT_MONO_BOLD = ("Consolas", 10, "bold")
 
 PAD = 8
 PAD_SMALL = 4
-
 SIDEBAR_WIDTH = 210

@@ -2,6 +2,208 @@
 
 ---
 
+## [1.0.0-beta.9] - 2026-08-30
+
+### Fixed
+
+#### Startup Crash on a Locked or Unopenable Database
+- `ui/app.py`: `BrisartApp.__init__()` now constructs the backend
+  `BrisartService` (and therefore opens the SQLite index and session
+  database) **before** the Tk window is created, not after. `run()`
+  wraps app construction in a single `try/except` and shows a proper
+  `messagebox.showerror()` dialog on failure instead of letting the
+  exception propagate into an unhandled console traceback.
+  - Root cause: previously the Tk window was built first, and a
+    subsequent failure opening the SQLite index (locked by another
+    running copy of BrisartAI, a read-only install folder, missing
+    file permissions, etc.) raised a raw `sqlite3` exception straight
+    out of the constructor. This left a half-built, invisible window
+    behind with no dialog ever shown -- the "Database startup errors
+    remain raw" limitation documented in `README.md` since beta.2.
+  - `ui/service.py`'s `BrisartService.__init__()` is now documented as
+    deliberately unguarded: it must be allowed to raise so `run()`'s
+    single catch site is the only place startup failures are handled,
+    rather than being silently swallowed partway through service setup.
+  - Verified with a standalone simulation reproducing the exact
+    construction order: on failure, zero window-like objects are ever
+    created, confirming `run()`'s `except` branch is reached before any
+    UI exists to leave in a broken state; on success, the window is
+    still created exactly once, unchanged from prior behavior.
+
+#### Duplicate, Drifted Function-Word List in Web Search
+- `web/search.py`: `FUNCTION_WORDS` (used by `_partition_related_results()`
+  to decide which query words are "meaningful" for judging whether a
+  search result is on-topic) is no longer a second, hand-maintained
+  word list -- it now imports the single canonical list from
+  `brisart_ai/blocklist.py`.
+  - Root cause: this module's local copy had silently drifted from the
+    shared list and was missing common words present there (e.g.
+    "about", "into", "over"). A query like "give me info about cats"
+    treated "about" as a meaningful topic term, so a completely
+    off-topic result that merely also contained the word "about" could
+    be marked "related" and pass through untouched.
+  - This is the same class of bug `blocklist.py`'s own docstring already
+    warns about ("previously each kept its own copy and they had
+    drifted out of sync") -- it just hadn't been caught here yet.
+  - Also removes, as a side effect, a dead two-word `"give me"` entry
+    that could never match anything: query terms are tokenized into
+    single words before this set is consulted, so a multi-word entry
+    was always inert.
+  - Verified with a synthetic two-result batch ("All About Cats" /
+    "All About Dogs" for the query "give me info about cats"): before
+    this fix, both results were incorrectly marked related; after, only
+    the genuinely on-topic result is.
+
+#### Founder/Company Recognition Vocabulary Expanded
+- `intent.py`: `_KNOWN_COMPANIES` (used to classify a "who
+  invented/founded X" question as a founder question rather than the
+  generic inventor default) now recognizes an additional ~25 well-known
+  single-token company names across streaming, gig-economy, fintech,
+  gaming, and productivity software (Twitch, DoorDash, Notion, Figma,
+  Palantir, Snowflake, Slack, Zoom, Roblox, and others).
+  - Root cause: any company not in this fixed, hand-maintained list
+    silently fell back to the inventor-intent default, which uses
+    different (and less appropriate) boost/penalty vocabulary for a
+    company-history question. This is a vocabulary-only change; an
+    unrecognized company still falls back exactly as before -- nothing
+    about the fallback behavior itself changed.
+  - Verified: `who founded twitch?` / `notion?` / `figma?` / `palantir?`
+    / `databricks?` / `roblox?` now all classify as the founder intent
+    (previously: inventor).
+
+### Verification
+- Re-ran all 4/4 `scripts/debug_offline_replay.py` fixtures; zero
+  regressions (this release does not modify `knowledge/ranker.py`).
+- Re-ran the full 1.0.0-beta.8 crawler test suite (title-awareness,
+  phrase-awareness, backward compatibility) after the `FUNCTION_WORDS`
+  consolidation fix above; all still pass.
+- Re-ran the mocked end-to-end pipeline test from beta.8 (search ->
+  title-aware rank -> crawl -> index -> synthesize) after all beta.9
+  changes; the correct source is still cited and the off-topic page is
+  still excluded.
+
+### Known Limitations
+- No formal automated unit-test suite or CI pipeline exists yet; the
+  replay scripts and the ad hoc verification described in each release
+  remain the primary form of regression checking (carried forward from
+  earlier releases).
+- The crawl-time relevance check is still ranking-based, not a hard
+  gate: a page can still enter the index even when it will end up
+  ranked last for every query (carried forward from beta.3).
+
+---
+
+## [1.0.0-beta.8] - 2026-08-29
+
+### Added
+
+#### Title- and Phrase-Aware Public Web Ranking
+- `web/search.py`: `search_public_web()` now accepts an optional
+  `with_titles` parameter. When `True`, it returns `list[tuple[str,
+  str]]` of `(url, title)` pairs instead of a bare `list[str]` of URLs
+  -- every provider already parsed out a result's displayed title
+  internally (to judge relatedness), but it was previously discarded
+  before reaching the caller. The default (`with_titles=False`)
+  reproduces the exact prior return type and behavior, so no existing
+  caller needed to change.
+- `web/crawler.py`: `score_result()`, `rank_results()`, and
+  `explain_ranking()` all accept an optional `title`/`titles` argument
+  and now fold a result's own displayed title into its relevance score
+  on equal footing with its hostname -- a topic term found only in the
+  title (not the URL) now earns the same credit a hostname match would.
+  A literal, contiguous multi-word phrase match against the combined
+  URL+title text now also earns a flat scoring bonus, with phrase
+  detection delegated to
+  `knowledge.ranker.phrase_match_adjust()` so web and offline ranking
+  cannot silently disagree about what counts as a "phrase match".
+  `web_search_and_ingest()` now requests titles from both the natural-
+  phrasing and keyword-fallback searches and threads them through to
+  ranking.
+  - Root cause / motivation: this closes a limitation documented since
+    beta.4 -- "Public web ranking still evaluates URLs only. Page
+    titles and search-result snippets are not yet incorporated into
+    ranking decisions." Many ordinary result URLs (news articles,
+    non-wiki pages) carry an opaque numeric ID or truncated slug with
+    none of the query's meaningful words; the words that actually
+    answer the question typically live only in the page's title, which
+    the URL-only scorer could never see.
+  - Verified with a synthetic two-result batch for "how much does a
+    blue whale weigh": two identically-shaped opaque numeric-slug URLs
+    (`/articles/48213`, `/articles/48214`) scored identically (-2, -2)
+    with no title information; once each result's real title was
+    supplied, the on-topic result ("How Much Does a Blue Whale Weigh?
+    Scientists Reveal the Answer") scored 14 against the off-topic
+    result's unchanged -2, and correctly ranked first.
+  - Verified the phrase-match bonus separately: a title containing the
+    literal contiguous phrase "history of the transistor" scored higher
+    (10) than a title containing the identical words in scrambled order,
+    "Transistor History Notes and Timeline" (6).
+  - Verified full backward compatibility: scoring the same two
+    Wikipedia transistor URLs used in prior releases' regression cases,
+    with no title supplied, produces the exact same relative ordering
+    as before this change.
+  - `scripts/debug_search_replay.py` updated to request titles via
+    `with_titles=True` and display each result's title, whether a
+    phrase match fired, and the full per-component score breakdown, so
+    a replay can show whether a result's title -- not just its URL --
+    is what moved it up or down.
+
+#### Broader Numeric/Quantity Detection in Answer Synthesis
+- `knowledge/synthesizer.py`: `_HAS_QUANTITY` now also recognizes
+  currency figures (a leading `$`/`€`/`£` directly against digits, or
+  the words "dollars"/"usd"), distances (km, miles, meters, feet),
+  mass (kg, pounds, tons), and time units (years, months, weeks, days,
+  hours, minutes, seconds), in addition to the original population/
+  demographic unit set (million, billion, percent, households, etc.).
+  - Root cause: a statistic-style question whose answer is a distance,
+    a weight, or a dollar figure rather than a population count (e.g.
+    "how much does a blue whale weigh", "what did the Louisiana
+    Purchase cost") previously had no unit-word match at all and fell
+    back to the much weaker bare-digit signal, which does not
+    reliably surface the sentence containing the actual figure.
+  - Verified against six representative sentences (population figures,
+    currency figures, mass figures, distance figures, a sentence with
+    no numbers, and a bare year) -- the broadened pattern correctly
+    matches the first four and correctly still does *not* match a bare
+    year on its own (which continues to fall back to the pre-existing,
+    weaker bare-digit signal, exactly as before).
+
+#### Founder/Company Recognition Vocabulary
+- See the 1.0.0-beta.9 entry above -- the company-vocabulary expansion
+  originally intended for this release was verified and shipped
+  together with beta.9's other fixes to keep this release focused on
+  ranking quality.
+
+### Verification
+- Re-ran all 4/4 `scripts/debug_offline_replay.py` fixtures; zero
+  regressions (this release does not modify `knowledge/ranker.py`
+  itself, only reuses one of its existing public functions from
+  `web/crawler.py`).
+- Full mocked end-to-end pipeline test (search -> title-aware rank ->
+  crawl -> index -> synthesize) for "how much does a blue whale weigh":
+  confirmed the correctly-titled article is both ranked first and cited
+  as the sole source, and the off-topic weather article is excluded
+  from the synthesized answer entirely.
+
+### Known Limitations
+- Search-result snippets (as opposed to titles) are still not
+  incorporated into web ranking; only the displayed anchor title is
+  used. Adding snippet text is a natural next step now that the
+  plumbing to preserve titles exists.
+- The phrase-match bonus in `web/crawler.py` is a flat integer bonus
+  (`PHRASE_MATCH_BONUS`), not the multiplicative factor
+  `knowledge.ranker.phrase_match_adjust()` itself returns -- this is
+  deliberate (see that constant's docstring for why multiplying a
+  small, possibly-negative integer heuristic score was judged riskier
+  than a flat, easily-explainable addition), but it does mean the two
+  ranking paths share phrase *detection* logic without sharing an
+  identical phrase *scoring* formula.
+- The exact current HTML structure of Mojeek, Brave Search, and
+  Startpage remains unverified against a live fetch (carried forward
+  from beta.7).
+
+---
+
 ## [1.0.0-beta.7] - 2026-08-26
 
 ### Fixed

@@ -14,7 +14,6 @@ REQUEST_TIMEOUT = 15
 
 def fetch_url(url: str) -> FetchResult:
     normalized = normalize_url(url)
-
     if not normalized:
         return FetchResult(
             url=str(url),
@@ -25,7 +24,6 @@ def fetch_url(url: str) -> FetchResult:
             links=[],
             error="invalid URL",
         )
-
     request = urllib.request.Request(
         normalized,
         headers={
@@ -38,7 +36,6 @@ def fetch_url(url: str) -> FetchResult:
             ),
         },
     )
-
     try:
         with urllib.request.urlopen(
             request,
@@ -47,16 +44,13 @@ def fetch_url(url: str) -> FetchResult:
             status = int(
                 getattr(response, "status", 200)
             )
-
             content_type = response.headers.get(
                 "Content-Type",
                 "",
             )
-
             raw = response.read(
                 MAX_PAGE_BYTES + 1
             )
-
             if len(raw) > MAX_PAGE_BYTES:
                 return FetchResult(
                     url=normalized,
@@ -67,19 +61,15 @@ def fetch_url(url: str) -> FetchResult:
                     links=[],
                     error="page too large",
                 )
-
             charset = (
                 response.headers.get_content_charset()
                 or "utf-8"
             )
-
             decoded = raw.decode(
                 charset,
                 errors="replace",
             )
-
             lowered_type = content_type.casefold()
-
             if "text/plain" in lowered_type:
                 return FetchResult(
                     url=normalized,
@@ -89,7 +79,6 @@ def fetch_url(url: str) -> FetchResult:
                     text=decoded.strip(),
                     links=[],
                 )
-
             if (
                 "text/html" not in lowered_type
                 and "application/xhtml" not in lowered_type
@@ -103,12 +92,10 @@ def fetch_url(url: str) -> FetchResult:
                     links=[],
                     error="unsupported content type",
                 )
-
             title, text, links = html_to_text(
                 decoded,
                 base_url=normalized,
             )
-
             return FetchResult(
                 url=normalized,
                 status=status,
@@ -117,7 +104,6 @@ def fetch_url(url: str) -> FetchResult:
                 text=text,
                 links=links,
             )
-
     except urllib.error.HTTPError as exc:
         return FetchResult(
             url=normalized,
@@ -128,7 +114,6 @@ def fetch_url(url: str) -> FetchResult:
             links=[],
             error=f"HTTP {exc.code}",
         )
-
     except urllib.error.URLError as exc:
         return FetchResult(
             url=normalized,
@@ -139,7 +124,6 @@ def fetch_url(url: str) -> FetchResult:
             links=[],
             error=f"network error: {exc.reason}",
         )
-
     except Exception as exc:
         return FetchResult(
             url=normalized,

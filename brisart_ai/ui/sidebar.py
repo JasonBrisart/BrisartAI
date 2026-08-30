@@ -1,5 +1,4 @@
 """Sidebar with the core actions plus a live status readout."""
-
 from __future__ import annotations
 
 import tkinter as tk

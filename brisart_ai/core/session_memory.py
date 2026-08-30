@@ -19,8 +19,9 @@ class SessionMemory:
     def __init__(self, db_path: str):
         # check_same_thread=False: web research answers are produced on a
         # background thread (see ui/app.py) while this connection is
-        # created on the main thread. Access is already serialized at the
-        # application level (only one request in flight at a time).
+        # created on the main thread. Access remains serialized at the
+        # application level (only one request in flight at a time), so no
+        # additional locking was required for correctness.
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute(
             """

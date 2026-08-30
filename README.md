@@ -82,14 +82,18 @@ When public web research is enabled, BrisartAI can:
 - Extract usable text
 - Reject known junk sources
 - Index retrieved evidence
-- Rank the results
+- Rank the results using both URL and result-title text
 - Produce a cited answer
 
-The current search provider sequence includes:
+The current search provider sequence, ordered from most likely to be
+blocked/challenged to least likely, is:
 
+- Startpage
+- Brave Search
 - DuckDuckGo HTML
 - DuckDuckGo Lite
 - Bing HTML
+- Mojeek
 - Wikipedia API fallback
 
 ### Source-Grounded Answers
@@ -151,15 +155,27 @@ The intent system is shared by web retrieval and offline document retrieval thro
 
 Intent is a ranking hint, not a hard filter. A source is not excluded solely because it lacks an expected intent term.
 
+### Title- and Phrase-Aware Web Ranking
+
+As of 1.0.0-beta.8, public web ranking no longer looks at a result's URL
+alone. Each search provider's displayed result title is preserved and
+folded into scoring on equal footing with the hostname, and a literal,
+contiguous multi-word phrase match against the combined URL and title
+text earns an additional bonus. This matters most for ordinary article
+URLs whose slug is an opaque numeric ID or a truncated fragment -- the
+words that actually answer the question typically live only in the
+title, which earlier releases' URL-only scorer could never see.
+
 ### Offline Document Retrieval
 
 Imported files, saved notes, and previously indexed content use the same retrieval principles as public web sources.
 
 Offline retrieval includes:
 
-- TF-IDF-style term scoring
+- TF-IDF-style term scoring with BM25-style document-length normalization
 - Stopword down-weighting
 - Meaningful-term coverage scoring
+- Title-match and literal phrase-match bonuses
 - Intent-aware score adjustment
 - Source-grounded answer synthesis
 
@@ -206,10 +222,11 @@ The web replay tool can display:
 - Detected intent
 - Topic terms
 - Provider activity
-- Accepted URLs
+- Accepted URLs and their displayed titles
+- Whether a literal phrase match fired
 - Intent boosts
 - Intent penalties
-- Final ranking
+- Final ranking with a full per-component score breakdown
 
 The offline replay tool validates ranking behavior against controlled document fixtures through the real SQLite retrieval path.
 
@@ -218,7 +235,6 @@ The offline replay tool validates ranking behavior against controlled document f
 ## Supported File Types
 
 ### Text and Documentation
-
 - `.txt`
 - `.md`
 - `.markdown`
@@ -227,7 +243,6 @@ The offline replay tool validates ranking behavior against controlled document f
 - `.log`
 
 ### Data Formats
-
 - `.csv`
 - `.tsv`
 - `.json`
@@ -241,7 +256,6 @@ The offline replay tool validates ranking behavior against controlled document f
 - `.conf`
 
 ### Source Code
-
 - `.py`
 - `.js`
 - `.ts`
@@ -260,7 +274,6 @@ The offline replay tool validates ranking behavior against controlled document f
 - `.sql`
 
 ### Web Content
-
 - `.html`
 - `.htm`
 - `.css`
@@ -308,6 +321,11 @@ The desktop application provides actions for:
 
 You can also type a question directly into the chat box and press Enter.
 
+If BrisartAI cannot open its local database on startup (for example, because
+another copy is already running and holding the index file, or the install
+folder is read-only), a dialog now explains the problem instead of the
+application crashing with a raw console traceback.
+
 ---
 
 ## Project Structure
@@ -345,14 +363,11 @@ You can also type a question directly into the chat box and press Enter.
     ├── blocklist.py             Shared source-blocking policy
     ├── intent.py                Query-intent detection and scoring
     └── util.py                  Tokens, hashes, paths, and URLs
-
     data/
     └── research_settings.json   Persisted research settings
-
     docs/
     ├── file_types.md
     └── safety.md
-
     scripts/
     ├── debug_offline_replay.py  Offline retrieval fixtures
     └── debug_search_replay.py   Live provider replay and diagnostics
@@ -403,13 +418,12 @@ Current limitations include:
 - Answer quality depends on source quality.
 - Ranking cannot recover a useful page that a search provider never returned.
 - Public web search depends on provider availability and HTML behavior.
-- Web ranking still relies heavily on URL-derived text.
-- Page titles and search-result snippets are not fully incorporated into final web ranking.
+- Web ranking now incorporates a result's displayed title in addition to
+  its URL, but search-result snippet text is still not used.
 - Founder classification uses a finite list of known company terms.
 - Office and PDF extraction is best-effort.
 - Scanned image-only documents require OCR, which BrisartAI does not currently provide.
 - Internet research is unavailable in fully air-gapped environments.
-- Database startup failures are not yet presented through a friendly error dialog.
 - There is no formal automated unit-test suite yet.
 
 ---
@@ -422,34 +436,47 @@ BrisartAI blocks known junk sources and rejects provider batches that appear unr
 
 It does not yet perform a full positive relevance validation on every individual page before indexing. Fine-grained relevance is primarily handled during ranking.
 
-### Web ranking remains URL-heavy
-
-Intent-aware web scoring primarily evaluates URL-derived text.
-
-A strongly named URL may occasionally outrank a better page whose title or snippet contains stronger evidence.
-
 ### Provider recall limits retrieval
 
 BrisartAI can improve the order of retrieved sources, but it cannot rank a source that was never returned by a provider.
 
 ### Company classification is finite
 
-Questions about known companies can be treated as founder questions. Unlisted companies may fall back to inventor-style classification.
+Questions about known companies can be treated as founder questions. Unlisted companies may fall back to inventor-style classification. The known-company list was expanded in 1.0.0-beta.9, but it remains a fixed, hand-maintained list rather than an open-ended detector.
 
 ### Replay checks are not a formal test suite
 
 The replay scripts provide repeatable validation for web and offline ranking, but the repository does not currently include a dedicated unit-test framework or automated CI suite.
 
-### Database startup errors remain raw
+### Mojeek, Brave Search, and Startpage markup is unverified live
 
-If the SQLite index or session database cannot be opened because of locking, permissions, or a read-only path, BrisartAI may display a raw traceback.
+The generic, markup-agnostic extractor used for these three providers has not been checked against a live fetch outside the development sandbox. If one of them returns zero results for a query known to have results, it is most likely serving a challenge/consent page.
 
 ---
 
 ## Recent Improvements
 
-### 1.0.0-beta.4
+### 1.0.0-beta.9
+- Fixed a startup crash: a locked, read-only, or otherwise unopenable
+  local database no longer produces a raw console traceback with no
+  window ever shown -- a friendly error dialog is displayed instead.
+- Fixed a drifted, duplicate function-word list in `web/search.py` that
+  could let a genuinely off-topic search result be marked "related" to
+  a query; it now reuses the single canonical list in `blocklist.py`.
+- Expanded the founder/company recognition vocabulary in `intent.py`
+  with roughly 25 additional well-known single-token company names.
 
+### 1.0.0-beta.8
+- Public web ranking is now title- and phrase-aware, not just
+  URL-aware: a result's own displayed title contributes to its score,
+  and a literal multi-word phrase match earns an additional bonus.
+- Broadened numeric/quantity detection in answer synthesis to cover
+  currency, distance, mass, and time units, not only population-style
+  demographic figures.
+- Updated `scripts/debug_search_replay.py` to display each result's
+  title and phrase-match status alongside its full score breakdown.
+
+### 1.0.0-beta.4
 - Added shared intent-aware ranking for web and offline retrieval
 - Added founder, inventor, statistic, explanation, and general intent classes
 - Added `brisart_ai/intent.py`
@@ -461,14 +488,13 @@ If the SQLite index or session database cannot be opened because of locking, per
 - Improved measured relevance for founder, inventor, and statistics queries
 
 ### 1.0.0-beta.3
-
 - Moved web research onto a background thread
 - Fixed desktop freezing during long web research operations
 - Fixed the Automatic Web Research setting for typed questions
 - Surfaced search and crawler diagnostics in the desktop transcript
 - Added distinct status messages for web and offline retrieval
 
-For the complete release history, see `CHANGELOG.md`.
+For the complete release history, see `docs/CHANGELOG.md`.
 
 ---
 
@@ -478,6 +504,7 @@ Additional documentation is available in:
 
 - `docs/file_types.md`
 - `docs/safety.md`
+- `docs/CHANGELOG.md`
 
 ---
 

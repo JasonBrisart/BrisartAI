@@ -14,7 +14,6 @@ This lives at the top level (next to util.py) rather than inside web/ so
 that knowledge/index.py can import it without the knowledge layer having
 to depend on the web layer.
 """
-
 from __future__ import annotations
 
 import re

@@ -26,7 +26,6 @@ Usage::
 Exit status is non-zero when a fixture's expected top chunk does not win,
 so this doubles as a regression check for the intent ranking.
 """
-
 from __future__ import annotations
 
 import os
@@ -186,7 +185,6 @@ def run_fixture(fixture: Fixture, limit: int = 5) -> bool:
                     extension="txt",
                     size_bytes=len(text),
                 )
-
             intent = detect_intent(query)
             print("=" * 74)
             print(f"fixture: {name}")
@@ -194,12 +192,10 @@ def run_fixture(fixture: Fixture, limit: int = 5) -> bool:
             print(f"intent:  {describe_intent(intent, query)}")
             print(f"chunks:  {len(chunks)}")
             print("-" * 74)
-
             results = search(index, query, limit=limit)
             if not results:
                 print("  (no results)")
                 return False
-
             for position, doc in enumerate(results, 1):
                 boosts = doc.get("intent_boosts") or []
                 penalties = doc.get("intent_penalties") or []
@@ -215,7 +211,6 @@ def run_fixture(fixture: Fixture, limit: int = 5) -> bool:
                 )
                 print(f"        source: {doc['location']}")
                 print(f"        reason: {'; '.join(reason)}")
-
             top = str(results[0]["title"])
             ok = top == expected_top
             print("-" * 74)
@@ -235,17 +230,14 @@ def main(argv: Sequence[str]) -> int:
         for name, query, _expected, _chunks in FIXTURES:
             print(f"{name:12} {query}")
         return 0
-
     selected = [f for f in FIXTURES if not args or f[0] in args]
     if not selected:
         print(f"no fixture matching {args}; use --list", file=sys.stderr)
         return 2
-
     results: Dict[str, bool] = {}
     for fixture in selected:
         results[fixture[0]] = run_fixture(fixture)
         print()
-
     passed = sum(1 for ok in results.values() if ok)
     print("=" * 74)
     print(f"offline fixtures: {passed}/{len(results)} passed")

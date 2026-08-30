@@ -30,7 +30,6 @@ class ChatPanel(ttk.Frame):
             state="disabled",
         )
         self.transcript.pack(side="top", fill="both", expand=True)
-
         self.transcript.tag_configure(
             "user", foreground=theme.FG_USER, font=theme.FONT_MONO_BOLD
         )

@@ -3,7 +3,6 @@
 This module does exactly one thing: read supported files and add them
 to the index.
 """
-
 from __future__ import annotations
 
 from typing import Iterable

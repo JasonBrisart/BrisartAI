@@ -14,6 +14,15 @@ existing notes gain ranked search automatically with nothing for the
 user to do. Collections, entity extraction, and timeline features from
 vault.py are intentionally not wired in here to keep the surface area
 small.
+
+Startup failures (1.0.0-beta.9): constructing ``Index``/``SessionMemory``
+below can raise a raw ``sqlite3`` exception if the database file is
+locked by another running copy of BrisartAI, sits on a read-only path,
+or is otherwise unopenable. This class deliberately does NOT catch that
+exception -- it is allowed to propagate out of ``__init__`` uncaught, on
+purpose, so that a single call site can present a friendly dialog
+instead of a raw console traceback. See ``ui/app.py``'s ``run()`` for
+where that single catch now lives.
 """
 from __future__ import annotations
 
@@ -48,7 +57,11 @@ class BrisartService:
 
     def __init__(self, db_path: str = DEFAULT_DB):
         self.db_path = db_path
+        # Deliberately unguarded: see the module docstring's "Startup
+        # failures" note. A locked/unopenable database must propagate
+        # to ui/app.py's run(), not be swallowed here.
         self.index = Index(db_path)
+
         # Remove any stale dictionary/definition web pages left in the
         # database by earlier builds so they cannot resurface in answers.
         removed = self.index.purge_blocked_web_sources()
@@ -57,6 +70,7 @@ class BrisartService:
                 f"Startup cleanup: removed {removed} stale "
                 "dictionary/definition page(s) from the index."
             )
+
         # Bring any notes saved before note-mirroring existed up to date,
         # so previously-saved notes silently gain full ranked search too.
         reindexed = reindex_missing_notes(self.index)
@@ -65,6 +79,7 @@ class BrisartService:
                 f"Startup cleanup: indexed {reindexed} previously "
                 "unindexed note(s) for ranked search."
             )
+
         self.memory = SessionMemory(db_path)
         self.settings = ResearchSettings()
         # Guards stdout redirection below -- only one ask() should be

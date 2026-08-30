@@ -1,6 +1,7 @@
 """Retrieval and ranking for BrisartAI.
 
 Ranking model (pure Python, no dependencies):
+
 1. Query terms are split into *meaningful* terms and *stopwords*.
    Stopwords -- ultra-common function/question words like "how", "many",
    "the", "is" -- are kept (so a query like "how many cats" still works)
@@ -85,6 +86,14 @@ generic-concept/length-normalization adjustments each return (or log)
 the exact signal(s) that fired, so ``scripts/debug_offline_replay.py``
 and ``scripts/debug_search_replay.py`` can show precisely why a document
 ranked where it did rather than just a final opaque number.
+
+1.0.0-beta.8 note: :func:`phrase_match_adjust` is now also imported
+directly by ``web/crawler.py`` so public web ranking can apply the same
+literal-phrase bonus to a result's URL+title text that offline ranking
+already applies to a document's title/location/body. This keeps the two
+ranking paths aligned rather than reimplementing the same phrase check
+twice (see the ``web/crawler.py`` module docstring for the web-side
+half of this change).
 """
 from __future__ import annotations
 
@@ -292,14 +301,12 @@ def title_match_adjust(
     title_terms = set(tokenize(title)) & meaningful_terms
     if not title_terms:
         return (1.0, [])
-
     if term_idf:
         average_idf = sum(term_idf.values()) / len(term_idf)
     else:
         average_idf = 1.0
     if average_idf <= 0:
         average_idf = 1.0
-
     weighted_total = 0.0
     matched_terms: List[str] = []
     for term in sorted(title_terms):
@@ -310,7 +317,6 @@ def title_match_adjust(
             relative_weight *= GENERIC_TERM_DAMPING
         weighted_total += relative_weight
         matched_terms.append(term)
-
     factor = min(
         TITLE_MATCH_MAX_FACTOR,
         1.0 + (TITLE_MATCH_WEIGHT * weighted_total),
@@ -416,33 +422,27 @@ def intent_adjust(
         )
         if part
     )
-
     score = base_score
     boosts: List[str] = []
     penalties: List[str] = []
-
     title_factor, title_boosts = title_match_adjust(
         title, topic_terms or set(), term_idf
     )
     if title_factor != 1.0:
         score *= title_factor
         boosts.extend(title_boosts)
-
     generic_factor, generic_penalties = generic_concept_title_adjust(
         title, location
     )
     if generic_factor != 1.0:
         score *= generic_factor
         penalties.extend(generic_penalties)
-
     phrase_factor, phrase_boosts = phrase_match_adjust(query, haystack)
     if phrase_factor != 1.0:
         score *= phrase_factor
         boosts.extend(phrase_boosts)
-
     if intent == INTENT_GENERAL:
         return (score, boosts, penalties)
-
     delta, intent_boosts, intent_penalties = score_intent(
         haystack,
         intent,
@@ -592,7 +592,6 @@ def search(
         term for term in unique_terms if term not in STOPWORDS
     }
     meaningful_total = len(meaningful_terms)
-
     types_list = list(source_types) if source_types else None
     if types_list:
         total_sources = max(1, sum(index.source_count(t) for t in types_list))
@@ -600,9 +599,7 @@ def search(
         total_sources = max(1, index.source_count(source_type))
     else:
         total_sources = max(1, index.source_count())
-
     term_sql = _build_term_sql(types_list, source_type)
-
     # Document lengths, for the BM25-style length-normalization factor
     # applied to each term's contribution below. Computed once up front
     # via a single aggregate query rather than per-term, since the same
@@ -610,7 +607,6 @@ def search(
     doc_lengths, average_doc_length = _load_document_lengths(
         index, types_list, source_type
     )
-
     scores: Dict[int, float] = collections.defaultdict(float)
     # Track which distinct meaningful terms each source matched, so we
     # can reward broad topical coverage rather than raw repetition of a

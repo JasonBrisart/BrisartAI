@@ -1,16 +1,24 @@
 """Small modal dialogs used by the BrisartAI desktop UI."""
 from __future__ import annotations
+
 import tkinter as tk
 from tkinter import filedialog, simpledialog
+
 from brisart_ai.core.settings import TOGGLE_LABELS
 from brisart_ai.ui import theme
+
+
 def ask_import_path(master) -> str:
     path = filedialog.askdirectory(title="Choose a folder to import")
     if not path:
         path = filedialog.askopenfilename(title="Or choose a single file")
     return path or ""
+
+
 def ask_text(master, title: str, prompt: str) -> str:
     return simpledialog.askstring(title, prompt, parent=master) or ""
+
+
 def ask_note(master) -> tuple:
     """Prompt for a note title and body.
 
@@ -25,8 +33,11 @@ def ask_note(master) -> tuple:
     if not body:
         return "", ""
     return title, body
+
+
 class SettingsDialog(tk.Toplevel):
     """Checkbox panel for BrisartAI research settings."""
+
     def __init__(self, master, service, on_change=None):
         super().__init__(master)
         self.title("Research Settings")
@@ -36,6 +47,7 @@ class SettingsDialog(tk.Toplevel):
         self.on_change = on_change
         self.vars = {}
         self._build()
+
     def _build(self) -> None:
         heading = tk.Label(
             self,
@@ -45,6 +57,7 @@ class SettingsDialog(tk.Toplevel):
             font=theme.FONT_HEADING,
         )
         heading.pack(anchor="w", padx=theme.PAD, pady=(theme.PAD, theme.PAD_SMALL))
+
         for key, label in TOGGLE_LABELS.items():
             var = tk.BooleanVar(value=self.service.settings.get(key))
             self.vars[key] = var
@@ -62,6 +75,7 @@ class SettingsDialog(tk.Toplevel):
                 anchor="w",
             )
             chk.pack(fill="x", padx=theme.PAD, pady=2)
+
         note = tk.Label(
             self,
             text=(
@@ -75,6 +89,7 @@ class SettingsDialog(tk.Toplevel):
             justify="left",
         )
         note.pack(anchor="w", padx=theme.PAD, pady=(theme.PAD, theme.PAD))
+
         close_btn = tk.Button(
             self,
             text="Close",
@@ -86,8 +101,11 @@ class SettingsDialog(tk.Toplevel):
             padx=14,
         )
         close_btn.pack(pady=(0, theme.PAD))
+
     def _toggle(self, key: str) -> None:
         self.service.settings.set(key, self.vars[key].get())
         if self.on_change:
             self.on_change()
+
+
 __all__ = ["ask_import_path", "ask_text", "ask_note", "SettingsDialog"]

@@ -4,7 +4,6 @@ These readers use only the Python standard library. They are intentionally
 simple and inspectable. They do not try to perfectly reproduce Office/PDF
 rendering. They extract useful searchable text when possible.
 """
-
 from __future__ import annotations
 
 import re

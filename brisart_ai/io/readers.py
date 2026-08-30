@@ -75,6 +75,7 @@ TEXT_EXTENSIONS = {
     ".gitignore",
     ".dockerfile",
 }
+
 BINARY_TEXT_EXTENSIONS = {
     ".docx",
     ".pptx",
@@ -82,7 +83,9 @@ BINARY_TEXT_EXTENSIONS = {
     ".odt",
     ".pdf",
 }
+
 SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | BINARY_TEXT_EXTENSIONS
+
 SUPPORTED_EXTENSIONLESS_NAMES = {
     "dockerfile",
     "makefile",

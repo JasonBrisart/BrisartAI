@@ -11,7 +11,6 @@ has been removed. That logic could silently rewrite a legitimate
 one-word question -- e.g. "stats" -> "status" -- into a command that no
 longer exists, corrupting the search.
 """
-
 from __future__ import annotations
 
 

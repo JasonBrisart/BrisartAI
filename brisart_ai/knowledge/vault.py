@@ -1,7 +1,6 @@
 """Knowledge Vault for BrisartAI.
 
 The vault adds structure on top of the raw SQLite source index.
-
 It provides:
 - research collections
 - local notes
@@ -540,7 +539,6 @@ def vault_report(index, top_entities: int = 25) -> str:
         ORDER BY hits DESC, collections.name ASC
         """
     ).fetchall()
-
     lines = []
     lines.append("BrisartAI Knowledge Vault")
     lines.append("")
@@ -554,14 +552,12 @@ def vault_report(index, top_entities: int = 25) -> str:
     lines.append(f"Notes: {note_count}")
     lines.append(f"Known entities: {entity_count}")
     lines.append("")
-
     if collection_rows:
         lines.append("Collections")
         lines.append("-----------")
         for name, hits in collection_rows:
             lines.append(f"- {name}: {hits} source(s)")
         lines.append("")
-
     if entity_rows:
         lines.append("Top Entities")
         lines.append("------------")
@@ -575,7 +571,6 @@ def vault_report(index, top_entities: int = 25) -> str:
         lines.append("Run:")
         lines.append("vault rebuild")
         lines.append("")
-
     lines.append("Interpretation")
     lines.append("--------------")
     if total_sources == 0:

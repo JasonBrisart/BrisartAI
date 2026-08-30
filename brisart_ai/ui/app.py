@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from typing import Optional
 
 from brisart_ai import APP_NAME, __version__
@@ -36,20 +36,39 @@ indexed, including your notes."""
 
 class BrisartApp(tk.Tk):
     def __init__(self, db_path: str = DEFAULT_DB):
+        # 1.0.0-beta.9: the backend service is constructed BEFORE the Tk
+        # window (super().__init__()) exists, not after. Previously the
+        # window was created first, and a subsequent failure opening the
+        # SQLite index (locked by another running copy of BrisartAI,
+        # read-only path, missing permissions, etc.) raised a raw
+        # sqlite3 exception straight through this constructor -- leaving
+        # a half-built, invisible Tk window behind and dumping a
+        # traceback to the console with no dialog ever shown (the long-
+        # standing "Database startup errors remain raw" limitation in
+        # README.md). Building the service first means a failure here
+        # propagates out of this constructor with NO Tk window created
+        # at all, so run() below can catch it in exactly one place and
+        # show a proper error dialog instead.
+        service = BrisartService(db_path)
+
         super().__init__()
+        self.service = service
         self.title(f"{APP_NAME} {__version__}")
         self.geometry("980x640")
         self.minsize(760, 480)
         self.configure(bg=theme.BG_APP)
-        self.service = BrisartService(db_path)
+
         self._busy = False
+
         self._configure_style()
         self._build_layout()
         self._refresh_status()
+
         self.chat.append_system(
             f"{APP_NAME} {__version__} ready. Type a question below and "
             "press Enter -- I'll search the web and answer here."
         )
+
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # -- setup ------------------------------------------------------------
@@ -73,8 +92,10 @@ class BrisartApp(tk.Tk):
         }
         self.sidebar = Sidebar(self, actions)
         self.sidebar.pack(side="left", fill="y")
+
         body = ttk.Frame(self, style="Panel.TFrame")
         body.pack(side="right", fill="both", expand=True, padx=theme.PAD, pady=theme.PAD)
+
         self.chat = ChatPanel(body, on_submit=self._on_chat_submit)
         self.chat.pack(fill="both", expand=True)
         self.chat.focus_input()
@@ -106,6 +127,7 @@ class BrisartApp(tk.Tk):
         question = question.strip()
         if not question or self._busy:
             return
+
         self._busy = True
         searching_web = (
             force_web
@@ -185,8 +207,39 @@ class BrisartApp(tk.Tk):
         self.destroy()
 
 
+def _show_startup_error(exc: Exception) -> None:
+    """Show a friendly dialog when BrisartAI cannot start.
+
+    Previously a locked, read-only, or otherwise unopenable SQLite index
+    (or session-memory) database surfaced as a raw traceback dumped to
+    the console with no window ever appearing -- the long-standing
+    "Database startup errors remain raw" limitation documented in
+    README.md. A throwaway Tk root is created purely to host this
+    dialog, since ``BrisartApp`` never gets far enough to build its own
+    window when startup fails this early (see ``BrisartApp.__init__``'s
+    note on construction order).
+    """
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showerror(
+        f"{APP_NAME} could not start",
+        "BrisartAI could not open its local database.\n\n"
+        f"Details: {exc}\n\n"
+        "This usually means the index file is locked by another running "
+        "copy of BrisartAI, the folder is read-only, or file permissions "
+        "are blocking access. Close any other running copies of "
+        "BrisartAI, confirm you have write access to the install folder, "
+        "and try again.",
+    )
+    root.destroy()
+
+
 def run(db_path: str = DEFAULT_DB) -> None:
-    app = BrisartApp(db_path)
+    try:
+        app = BrisartApp(db_path)
+    except Exception as exc:
+        _show_startup_error(exc)
+        return
     app.mainloop()
 
 

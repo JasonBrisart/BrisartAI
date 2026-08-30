@@ -3,7 +3,8 @@
 This module is the single chokepoint through which every web page must
 pass to be indexed.
 
-Three layers keep junk out of your answers:
+Four layers keep junk out of your answers and push good answers to the
+top:
 
 1. QUERY NORMALIZATION: a question keeps its natural phrasing when sent
    to a search engine ("how many cats are in america" is searched as
@@ -15,19 +16,32 @@ Three layers keep junk out of your answers:
    word "many") is rejected -- it is about the word, not your topic.
 3. HOST BLOCKING: known dictionary/thesaurus/definition sites are
    refused at ingest time as a final safety net.
+4. TITLE- AND PHRASE-AWARE RANKING (1.0.0-beta.8): result ranking used
+   to look at URL text only. A search result's own displayed title
+   (returned by every provider in ``web/search.py`` but previously
+   discarded before reaching this module -- see that module's "Title-
+   preserving results" note) now contributes to scoring on equal footing
+   with the host: a term found in a result's title earns the same
+   credit as one found in the hostname, and a literal multi-word phrase
+   match against the combined URL+title text earns a flat bonus, reusing
+   :func:`brisart_ai.knowledge.ranker.phrase_match_adjust`'s phrase-
+   detection logic so web and offline ranking agree on what counts as a
+   "phrase match" rather than keeping two separate implementations. This
+   matters most for ordinary news/article URLs whose slug is a numeric
+   ID or a truncated fragment -- the meaningful words often live only in
+   the title, which the URL-only scorer could never see.
 
 The blocklist, function-word list, and junk-detection helpers live in
 brisart_ai/blocklist.py so search.py, crawler.py, and index.py all share
 one definition instead of each keeping their own copy.
 """
-
 from __future__ import annotations
 
 import queue
 import re
 import time
 import urllib.parse
-from typing import List, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from brisart_ai.blocklist import (
     ACCOUNT_HOST_PREFIXES,
@@ -42,6 +56,7 @@ from brisart_ai.intent import (
     detect_intent,
     score_intent,
 )
+from brisart_ai.knowledge.ranker import phrase_match_adjust
 from brisart_ai.util import (
     normalize_url,
     same_site,
@@ -75,7 +90,10 @@ _QUERY_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-']*")
 # "-", "_" and "." separate words, so "history-of-microsoft-1975" must
 # tokenize to {history, of, microsoft, 1975}. Using _QUERY_WORD here was a
 # real bug -- it kept the slug as ONE token, so "microsoft" never matched
-# and genuine articles were scored as unrelated.
+# and genuine articles were scored as unrelated. The same tokenizer is
+# reused for a result's title text (see score_result()/_score_detail()
+# below), since a title is ordinary prose and needs the same simple
+# word-splitting a URL slug does.
 _URL_WORD = re.compile(r"[A-Za-z0-9]+")
 
 # Longest-first so "ation" is tried before "ed"/"s".
@@ -138,27 +156,23 @@ def search_keyword_fallback(query: str) -> str:
     """
     raw = str(query or "")
     lowered = " " + " ".join(raw.lower().split()) + " "
-
     hints: List[str] = []
     for phrase, hint in _INTENT_HINTS:
         needle = " " + " ".join(phrase) + " "
         if needle in lowered:
             hints.append(hint)
-
     tokens = _QUERY_WORD.findall(raw)
     kept = [
         token
         for token in tokens
         if token.casefold() not in FUNCTION_WORDS
     ]
-
     kept_lower = {token.casefold() for token in kept}
     for hint in hints:
         for word in hint.split():
             if word not in kept_lower:
                 kept.append(word)
                 kept_lower.add(word)
-
     cleaned = " ".join(kept).strip()
     if cleaned:
         return cleaned
@@ -180,10 +194,34 @@ def _topic_terms(cleaned_query: str) -> Set[str]:
     }
 
 
+# Weight of one intent point relative to the URL-overlap scale below,
+# where a path term match is +3. Set to 2 so genre signal can reorder
+# results that overlap comparably, yet cannot by itself lift a page that
+# matches nothing: the worst case is a 4-boost page gaining +8, still
+# below a page matching three topic terms in its path.
+INTENT_WEIGHT = 2
+
+# Flat bonus applied when the literal (2+ word) query phrase appears,
+# contiguously and format-agnostically, somewhere in a result's combined
+# URL+title text. Detection is delegated to
+# brisart_ai.knowledge.ranker.phrase_match_adjust so web and offline
+# ranking cannot silently disagree about what counts as a phrase match;
+# only the boolean "did it match" is used here, not that function's own
+# multiplicative factor, since this module's score is a small hand-tuned
+# integer heuristic (+3/+2/-4/-3/-2, see score_result()) rather than a
+# multiplicative TF-IDF score -- multiplying a possibly-negative integer
+# by 1.35 would occasionally flip or distort its sign in a way that is
+# hard to reason about. A flat bonus roughly on the scale of a distinct
+# path-term match (+3) keeps the adjustment easy to explain in
+# explain_ranking() output.
+PHRASE_MATCH_BONUS = 4
+
+
 def score_result(
     url: str,
     topic_terms: Set[str],
     query: str = "",
+    title: str = "",
 ) -> int:
     """Heuristic relevance score for a result URL. Higher is better.
 
@@ -194,17 +232,22 @@ def score_result(
     that on its own, so both phrasings are merged and ranked here rather
     than trusting provider order.
 
-    Only the URL is used, because ranking happens before any fetch:
+    Signals used (URL only, since ranking happens before any fetch,
+    plus the result's own displayed ``title`` when the caller has one):
       +3  per topic term in the path (strongest signal)
-      +2  per topic term in the hostname
+      +2  per topic term in the hostname OR in the result's title
+          (whichever position for that term is checked first; a term is
+          only ever credited once -- "credit each term once, best
+          placement wins")
       +2  path looks like an article (hyphenated multi-word slug),
           but only when the URL already matched a topic term -- an
           unrelated hyphenated slug is not evidence of relevance
+      +4  the literal 2+ word query phrase appears in the URL+title text
       -4  host is rarely an answer (video/social/help-desk/shopping)
       -3  path looks like a search/listing/category page
       -4  host is a brand sign-in/account portal (matches the brand
           name but never answers a question about it)
-      -2  no topic term matched anywhere in the URL
+      -2  no topic term matched anywhere in the URL or title
       +2  per extra distinct topic term matched (coverage bonus)
 
     When ``query`` is supplied, an intent adjustment from
@@ -213,34 +256,35 @@ def score_result(
     for "who invented microsoft" -- both match "microsoft" -- so the
     intent layer supplies the missing genre signal. ``query`` is optional
     to keep the existing two-argument callers working unchanged.
+
+    ``title`` is optional (default ``""``, meaning "no title known",
+    which reproduces the pre-1.0.0-beta.8 URL-only behavior exactly).
+    When supplied -- typically from ``search_public_web(with_titles=True)``
+    via ``web_search_and_ingest()`` below -- it lets a result earn credit
+    for topic terms and phrases that live only in its displayed title
+    rather than its URL slug, which matters most for ordinary article
+    URLs with opaque or numeric-ID paths.
     """
-    _matched, score = _score_detail(url, topic_terms, query)
+    _matched, score = _score_detail(url, topic_terms, query, title)
     return score
-
-
-# Weight of one intent point relative to the URL-overlap scale above,
-# where a path term match is +3. Set to 2 so genre signal can reorder
-# results that overlap comparably, yet cannot by itself lift a page that
-# matches nothing: the worst case is a 4-boost page gaining +8, still
-# below a page matching three topic terms in its path.
-INTENT_WEIGHT = 2
 
 
 def _score_detail(
     url: str,
     topic_terms: Set[str],
     query: str = "",
+    title: str = "",
 ) -> Tuple[int, int]:
     """Return (distinct topic terms matched, heuristic score)."""
     try:
         parts = urllib.parse.urlsplit(url)
     except ValueError:
         return (0, -100)
-
     host = (parts.hostname or "").casefold()
     path = (parts.path or "").casefold()
     path_words = set(_URL_WORD.findall(path))
     host_words = set(_URL_WORD.findall(host))
+    title_words = set(_URL_WORD.findall(str(title or "").casefold()))
 
     def _matches(term: str, words: Set[str]) -> bool:
         stem = _stem(term)
@@ -253,10 +297,13 @@ def _score_detail(
         # Credit each term once, best placement wins. Summing host+path
         # let a brand double-dip (cats.com/cat-Breeds scored "cats"
         # twice) and outrank a page that actually answers the question.
+        # Title is checked at the same tier as host: both are "this term
+        # appears somewhere relevant, just not in the strongest position
+        # (the path)" rather than direct URL-slug evidence.
         if _matches(term, path_words):
             score += 3
             matched_terms += 1
-        elif _matches(term, host_words):
+        elif _matches(term, host_words) or _matches(term, title_words):
             score += 2
             matched_terms += 1
 
@@ -266,6 +313,7 @@ def _score_detail(
     # it let a penalized sign-in page outrank a clean unrelated homepage.
     if matched_terms > 1:
         score += 2 * (matched_terms - 1)
+
     # Article-shaped slug. Both separators count: Wikipedia uses "_"
     # ("History_of_the_transistor") while most CMS platforms use "-".
     # Checking only "-" was a real bug -- it silently denied this bonus to
@@ -278,6 +326,7 @@ def _score_detail(
         if len(seg) > 8
     ):
         score += 2
+
     if any(host.startswith(prefix) for prefix in ACCOUNT_HOST_PREFIXES):
         score -= 4
     if topic_terms and not matched_terms:
@@ -287,19 +336,33 @@ def _score_detail(
     if any(marker in path for marker in LISTING_PATH_MARKERS):
         score -= 3
 
-    # Intent adjustment. Applied to the whole URL so both the host and
-    # the slug can carry genre signal.
+    # Literal-phrase bonus. Detection is delegated to
+    # knowledge.ranker.phrase_match_adjust so web and offline ranking
+    # cannot disagree about what a "phrase match" means; only whether it
+    # fired is used here (see PHRASE_MATCH_BONUS for why this module
+    # adds a flat bonus instead of applying that function's own
+    # multiplicative factor).
+    if query:
+        phrase_haystack = f"{_intent_text(url)} {title or ''}"
+        phrase_factor, _phrase_hits = phrase_match_adjust(
+            query, phrase_haystack
+        )
+        if phrase_factor != 1.0:
+            score += PHRASE_MATCH_BONUS
+
+    # Intent adjustment. Applied to the whole URL (plus title, when
+    # known) so the host, the slug, AND the result's own displayed title
+    # can all carry genre signal.
     if query:
         intent = detect_intent(query)
         if intent != INTENT_GENERAL:
             delta, _boosts, _penalties = score_intent(
-                _intent_text(url),
+                f"{_intent_text(url)} {title or ''}",
                 intent,
                 query,
                 topic_terms=topic_terms,
             )
             score += int(round(delta * INTENT_WEIGHT))
-
     return (matched_terms, score)
 
 
@@ -330,14 +393,21 @@ def rank_results(
     urls: Sequence[str],
     topic_terms: Set[str],
     query: str = "",
+    titles: Optional[Dict[str, str]] = None,
 ) -> List[str]:
     """De-duplicate and sort URLs best-first, preserving order on ties.
 
     Sort key is (score, original position). Multi-term coverage is folded
     into the score as a bonus rather than used as a separate leading key,
     so a heavily penalized page can never ride one matched term above a
-    cleaner result. ``query`` is optional and enables intent-aware
-    scoring; without it the behavior is unchanged.
+    cleaner result. ``query`` is optional and enables intent-aware and
+    phrase-aware scoring; without it the behavior is unchanged.
+
+    ``titles``, when supplied, is a mapping of normalized URL ->
+    displayed result title (as returned by
+    ``search_public_web(with_titles=True)``). Each URL's title, if
+    present in this mapping, is folded into its score via
+    :func:`_score_detail` alongside the URL itself.
     """
     seen: Set[str] = set()
     unique: List[Tuple[int, int, str]] = []
@@ -346,7 +416,8 @@ def rank_results(
         if key in seen:
             continue
         seen.add(key)
-        _matched, score = _score_detail(url, topic_terms, query)
+        title = (titles or {}).get(key, "")
+        _matched, score = _score_detail(url, topic_terms, query, title)
         unique.append((-score, position, url))
     unique.sort()
     return [url for _, _, url in unique]
@@ -356,13 +427,17 @@ def explain_ranking(
     urls: Sequence[str],
     topic_terms: Set[str],
     query: str = "",
+    titles: Optional[Dict[str, str]] = None,
 ) -> List[dict]:
     """Per-URL scoring breakdown, best-first. Used by the replay scripts.
 
     Ranking that cannot be inspected cannot be trusted, and this project
     already shipped one confidently wrong diagnosis. Every component of
     the final score is reported so a bad ordering can be traced to the
-    rule that caused it.
+    rule that caused it. When ``titles`` is supplied, each row also
+    reports the title (if any) that was folded into its score, so a
+    replay makes it obvious when a result's title -- not just its URL --
+    is what moved it up or down.
     """
     intent = detect_intent(query) if query else INTENT_GENERAL
     rows: List[dict] = []
@@ -372,20 +447,32 @@ def explain_ranking(
         if key in seen:
             continue
         seen.add(key)
-        matched, total = _score_detail(url, topic_terms, query)
-        _base_matched, base = _score_detail(url, topic_terms, "")
+        title = (titles or {}).get(key, "")
+        matched, total = _score_detail(url, topic_terms, query, title)
+        _base_matched, base = _score_detail(url, topic_terms, "", "")
         if intent != INTENT_GENERAL:
             delta, boosts, penalties = score_intent(
-                _intent_text(url), intent, query, topic_terms=topic_terms
+                f"{_intent_text(url)} {title or ''}",
+                intent,
+                query,
+                topic_terms=topic_terms,
             )
         else:
             delta, boosts, penalties = (0.0, [], [])
+        phrase_matched = False
+        if query:
+            phrase_factor, _hits = phrase_match_adjust(
+                query, f"{_intent_text(url)} {title or ''}"
+            )
+            phrase_matched = phrase_factor != 1.0
         rows.append(
             {
                 "url": url,
+                "title": title,
                 "position": position,
                 "terms_matched": matched,
                 "base_score": base,
+                "phrase_matched": phrase_matched,
                 "intent": intent,
                 "intent_delta": int(round(delta * INTENT_WEIGHT)),
                 "boosts": boosts,
@@ -444,7 +531,6 @@ def crawl_urls_to_index(
         crawl_delay = max(0.0, float(delay))
     except (TypeError, ValueError):
         crawl_delay = DEFAULT_DELAY_SECONDS
-
     topics = topic_terms or set()
 
     stats = CrawlStats()
@@ -468,28 +554,22 @@ def crawl_urls_to_index(
     while not pending.empty() and crawled < crawl_limit:
         current_url, level, root_url = pending.get()
         stats.requested += 1
-
         if _should_reject(current_url, topics):
             print(f"SKIP off-topic/definition result: {current_url}")
             continue
-
         if not robots.allowed(current_url):
             print(f"SKIP robots.txt: {current_url}")
             continue
-
         print(f"WEB FETCH depth={level}: {current_url}")
         result = fetch_url(current_url)
-
         if result.error:
             stats.errors += 1
             print(f"  WARN: {result.error}")
             continue
-
         if not result.text.strip():
             stats.skipped_empty += 1
             print("  WARN: page contained no extractable text")
             continue
-
         content_hash = stable_hash(result.text)
         if content_exists(index, content_hash):
             stats.skipped_duplicates += 1
@@ -513,7 +593,6 @@ def crawl_urls_to_index(
                     f"  OK: {len(result.text)} chars, "
                     f"{len(result.links)} links"
                 )
-
         if level < crawl_depth:
             for link in result.links:
                 normalized_link = normalize_url(link)
@@ -530,7 +609,6 @@ def crawl_urls_to_index(
                     continue
                 seen.add(normalized_link)
                 pending.put((normalized_link, level + 1, root_url))
-
         if crawl_delay:
             time.sleep(crawl_delay)
 
@@ -548,16 +626,18 @@ def web_search_and_ingest(
 
     The question is searched twice -- once in its natural phrasing and
     once as bare keywords -- because neither form is reliably better.
-    Results are merged, de-duplicated, filtered for dictionary hosts and
-    off-topic disambiguation pages, then ranked by score_result() so the
-    best `limit` pages are crawled regardless of provider ordering.
+    Both searches are made with ``with_titles=True`` so each result's
+    displayed title is preserved rather than discarded (see
+    ``web/search.py``'s "Title-preserving results" note). Results are
+    merged, de-duplicated, filtered for dictionary hosts and off-topic
+    disambiguation pages, then ranked by :func:`rank_results` -- now
+    title- and phrase-aware, not just URL-aware -- so the best ``limit``
+    pages are crawled regardless of provider ordering.
     """
     search_terms = clean_search_query(query)
     fallback_terms = search_keyword_fallback(query)
-
     intent = detect_intent(query)
     print(f"Detected intent: {describe_intent(intent, query)}")
-
     if search_terms != query:
         print(f"Web search terms: {search_terms!r} (from: {query!r})")
     else:
@@ -570,22 +650,38 @@ def web_search_and_ingest(
     # question returned Wikipedia trivia. Union + rank beats picking one.
     topics = _topic_terms(search_terms) | _topic_terms(fallback_terms)
 
-    collected: List[str] = list(search_public_web(search_terms, limit=limit))
-
+    collected: List[Tuple[str, str]] = list(
+        search_public_web(search_terms, limit=limit, with_titles=True)
+    )
     if fallback_terms and fallback_terms != search_terms:
         print(f"Also searching keyword form: {fallback_terms!r}")
-        collected.extend(search_public_web(fallback_terms, limit=limit))
+        collected.extend(
+            search_public_web(fallback_terms, limit=limit, with_titles=True)
+        )
 
-    kept = [link for link in collected if not _should_reject(link, topics)]
-    removed = len(collected) - len(kept)
+    kept_pairs = [
+        (url, title)
+        for url, title in collected
+        if not _should_reject(url, topics)
+    ]
+    removed = len(collected) - len(kept_pairs)
     if removed:
         print(
             f"Filtered out {removed} off-topic/definition result(s) "
             "before crawling."
         )
 
-    filtered = rank_results(kept, topics, query)[:limit]
+    # First title seen for a given normalized URL wins, matching the
+    # first-occurrence-wins dedup rank_results()/explain_ranking() already
+    # apply internally.
+    titles_map: Dict[str, str] = {}
+    for url, title in kept_pairs:
+        key = normalize_url(url)
+        if key and title and key not in titles_map:
+            titles_map[key] = title
 
+    kept = [url for url, _title in kept_pairs]
+    filtered = rank_results(kept, topics, query, titles=titles_map)[:limit]
     if not filtered:
         print(
             "No usable public search results were found or the provider "
@@ -595,7 +691,11 @@ def web_search_and_ingest(
 
     print("Search results:")
     for number, link in enumerate(filtered, start=1):
-        print(f"[{number}] {link}")
+        title = titles_map.get(normalize_url(link), "")
+        if title:
+            print(f"[{number}] {link}  (title: {title!r})")
+        else:
+            print(f"[{number}] {link}")
 
     return crawl_urls_to_index(
         filtered,
@@ -610,6 +710,7 @@ def web_search_and_ingest(
 __all__ = [
     "DEFAULT_DELAY_SECONDS",
     "INTENT_WEIGHT",
+    "PHRASE_MATCH_BONUS",
     "clean_search_query",
     "content_exists",
     "crawl_urls_to_index",

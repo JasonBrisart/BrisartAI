@@ -63,7 +63,6 @@ from typing import Dict, FrozenSet, List, Sequence, Set, Tuple
 # --------------------------------------------------------------------------
 # Intent labels
 # --------------------------------------------------------------------------
-
 INTENT_FOUNDER = "founder"
 INTENT_INVENTOR = "inventor"
 INTENT_STATISTIC = "statistic"
@@ -104,6 +103,14 @@ _CREATION_VERBS: FrozenSet[str] = frozenset(
 # is unreliable, and a wrong guess sends the query to the wrong intent.
 # Unknown entities fall through to the inventor intent, whose boosts
 # (history/origin/developed) are a safe default for creation questions.
+#
+# 1.0.0-beta.9: extended with additional well-known single-token company
+# names (streaming/gig/fintech/gaming/productivity brands) that were
+# previously falling through to the inventor-intent default. This is a
+# vocabulary-only change: matching is still a single-token, hand-
+# maintained list, exactly like the original set below it, so an
+# unrecognized company still safely falls back to inventor-style
+# classification rather than guessing.
 _KNOWN_COMPANIES: FrozenSet[str] = frozenset(
     {
         "microsoft", "apple", "google", "amazon", "facebook", "meta",
@@ -118,6 +125,13 @@ _KNOWN_COMPANIES: FrozenSet[str] = frozenset(
         "disney", "pixar", "wikipedia", "mozilla", "canonical",
         "redhat", "github", "gitlab", "atlassian", "shopify",
         "stripe", "square", "robinhood", "coinbase", "binance",
+        # -- added in 1.0.0-beta.9 --
+        "twitch", "doordash", "instacart", "peloton", "zillow",
+        "yelp", "grubhub", "chegg", "asana", "notion", "figma",
+        "canva", "palantir", "snowflake", "databricks", "block",
+        "blizzard", "activision", "ubisoft", "riot", "epic",
+        "slack", "zoom", "airtable", "twilio", "okta", "datadog",
+        "roblox", "unity", "epicgames",
     }
 )
 
@@ -212,7 +226,6 @@ def _has_phrase(words: Sequence[str], phrase: Sequence[str]) -> bool:
 # --------------------------------------------------------------------------
 # Per-intent scoring vocabulary
 # --------------------------------------------------------------------------
-
 # Multi-word entries are matched as substrings of the (space-normalized)
 # haystack; single words are matched as whole tokens. That distinction
 # matters: "bell labs" must match as a phrase, while "history" should not
@@ -694,18 +707,14 @@ def score_intent(
     haystack, tokens = _normalize_haystack(text)
     if not haystack:
         return (0.0, [], [])
-
     vocabulary_hits = _match_vocabulary(
         haystack, tokens, boost_terms(intent, query)
     )
     penalties = _match_vocabulary(haystack, tokens, penalty_terms(intent))
-
     strong_boosts: List[str] = []
-
     # A year is concrete evidence for a "when was it invented" question.
     if query and wants_date(query) and _YEAR_RE.search(haystack):
         strong_boosts.append(SIGNAL_YEAR)
-
     # A person's page answers a "who" question despite carrying no genre
     # vocabulary. Only the raw text can show this, since the check needs
     # capitalization that the normalized haystack has discarded.
@@ -719,16 +728,13 @@ def score_intent(
         )
     ):
         strong_boosts.append(SIGNAL_PERSON)
-
     # A creative work sharing the query's wording is not an answer.
     if _WORK_QUALIFIER_RE.search(str(text or "")):
         penalties = penalties + [SIGNAL_WORK]
-
     # A bare concept page borrows the question's verb without its
     # subject; demote it so an entity-specific page wins.
     if topic_terms is not None and is_generic_concept_page(text, topic_terms):
         penalties = penalties + [SIGNAL_GENERIC]
-
     counted = vocabulary_hits[: max(0, max_boosts)]
     boost_total = sum(
         BOOST_WEIGHTS.get(term, 1.0) for term in counted
@@ -736,7 +742,6 @@ def score_intent(
     penalty_total = sum(
         PENALTY_WEIGHTS.get(term, 1.0) for term in penalties
     )
-
     delta = (boost_total * boost_weight) - (penalty_total * penalty_weight)
     return (delta, counted + strong_boosts, penalties)
 

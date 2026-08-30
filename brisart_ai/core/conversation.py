@@ -83,6 +83,7 @@ def build_conversation_answer(
         settings is not None and settings.get("auto_web_research")
     )
     should_search_web = force_web or (not docs and auto_enabled)
+
     used_web = False
     if should_search_web:
         used_web = True

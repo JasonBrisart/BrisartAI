@@ -4,7 +4,10 @@
 This is a diagnostic harness, not a test suite. It exercises the genuine
 provider stack (no mocks) so retrieval-quality regressions are visible:
 which query forms were sent, which provider answered, which batches were
-rejected wholesale as unrelated, and how the survivors ranked.
+rejected wholesale as unrelated, and how the survivors ranked -- now
+including each result's own title and whether a literal phrase match
+fired, per the 1.0.0-beta.8 title/phrase-aware ranking change in
+``web/crawler.py``.
 
 Live providers rate-limit aggressively. Runs are spaced by --delay
 seconds by default; lower it only for a single-query run.
@@ -14,7 +17,6 @@ Usage:
     python3 scripts/debug_search_replay.py --query "why do cats purr"
     python3 scripts/debug_search_replay.py --limit 8 --delay 60
 """
-
 from __future__ import annotations
 
 import argparse
@@ -23,7 +25,7 @@ import io
 import os
 import sys
 import time
-from typing import List
+from typing import Dict, List
 
 sys.path.insert(
     0,
@@ -31,6 +33,7 @@ sys.path.insert(
 )
 
 from brisart_ai.intent import describe_intent, detect_intent  # noqa: E402
+from brisart_ai.util import normalize_url  # noqa: E402
 from brisart_ai.web.crawler import (  # noqa: E402
     _should_reject,
     _topic_terms,
@@ -61,7 +64,6 @@ def _run_one(query: str, limit: int) -> bool:
     """Replay a single query. Returns True when usable results survived."""
     print(RULE)
     print(f"ORIGINAL QUERY : {query!r}")
-
     natural = clean_search_query(query)
     keyword = search_keyword_fallback(query)
     print(f"NATURAL FORM   : {natural!r}")
@@ -69,20 +71,19 @@ def _run_one(query: str, limit: int) -> bool:
         print(f"KEYWORD FORM   : {keyword!r}")
     else:
         print("KEYWORD FORM   : (same as natural; not searched twice)")
-
     topics = _topic_terms(natural) | _topic_terms(keyword)
     print(f"TOPIC TERMS    : {sorted(topics)}")
     intent = detect_intent(query)
     print(f"DETECTED INTENT: {describe_intent(intent, query)}")
 
-    collected: List[str] = []
+    collected: List[tuple] = []
     for label, form in (("natural", natural), ("keyword", keyword)):
         if label == "keyword" and (not keyword or keyword == natural):
             continue
         print(f"\n--- provider trace ({label} form: {form!r}) ---")
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
-            found = search_public_web(form, limit=limit)
+            found = search_public_web(form, limit=limit, with_titles=True)
         for line in buffer.getvalue().splitlines():
             text = line.strip()
             if not text:
@@ -99,36 +100,59 @@ def _run_one(query: str, limit: int) -> bool:
         print("FINAL RANKED   : (none)")
         return False
 
-    kept = [url for url in collected if not _should_reject(url, topics)]
-    dropped = [url for url in collected if _should_reject(url, topics)]
+    kept_pairs = [
+        (url, title)
+        for url, title in collected
+        if not _should_reject(url, topics)
+    ]
+    dropped_pairs = [
+        (url, title)
+        for url, title in collected
+        if _should_reject(url, topics)
+    ]
 
+    titles_map: Dict[str, str] = {}
+    for url, title in kept_pairs:
+        key = normalize_url(url)
+        if key and title and key not in titles_map:
+            titles_map[key] = title
+
+    kept = [url for url, _title in kept_pairs]
     print(f"\nACCEPTED URLS  : {len(kept)}")
-    for url in kept:
-        print(f"  + {url}")
-    if dropped:
-        print(f"REJECTED URLS  : {len(dropped)} (off-topic/definition filter)")
-        for url in dropped:
+    for url, title in kept_pairs:
+        title_note = f"  (title: {title!r})" if title else ""
+        print(f"  + {url}{title_note}")
+    if dropped_pairs:
+        print(f"REJECTED URLS  : {len(dropped_pairs)} (off-topic/definition filter)")
+        for url, _title in dropped_pairs:
             print(f"  - {url}")
 
-    final = rank_results(kept, topics, query)[:limit]
+    final = rank_results(kept, topics, query, titles=titles_map)[:limit]
     print("FINAL RANKED   :")
     for position, url in enumerate(final, start=1):
-        print(f"  {position}. {url}")
+        title = titles_map.get(normalize_url(url), "")
+        title_note = f"  (title: {title!r})" if title else ""
+        print(f"  {position}. {url}{title_note}")
 
     # Per-URL scoring breakdown. A ranking that cannot be inspected
     # cannot be trusted -- this project already shipped one confidently
-    # wrong diagnosis, so every component of the score is shown.
+    # wrong diagnosis, so every component of the score is shown,
+    # including whether the result's own title (not just its URL)
+    # contributed, and whether a literal phrase match fired.
     print("SCORING DETAIL :")
     print(
         f"  {'score':>6} {'base':>5} {'intent':>6}  "
-        f"{'terms':>5}  url / reason"
+        f"{'terms':>5}  {'phrase':>6}  url / title / reason"
     )
-    for row in explain_ranking(kept, topics, query)[:limit]:
+    for row in explain_ranking(kept, topics, query, titles=titles_map)[:limit]:
+        phrase_flag = "yes" if row["phrase_matched"] else "no"
         print(
             f"  {row['score']:>+6d} {row['base_score']:>+5d} "
             f"{row['intent_delta']:>+6d}  {row['terms_matched']:>5}  "
-            f"{row['url']}"
+            f"{phrase_flag:>6}  {row['url']}"
         )
+        if row["title"]:
+            print(f"         title: {row['title']!r}")
         reason = []
         if row["boosts"]:
             reason.append("boost=" + ",".join(row["boosts"]))
@@ -169,7 +193,6 @@ def main() -> int:
         except KeyboardInterrupt:
             print("\ninterrupted")
             return 130
-
     print(RULE)
     print(f"SUMMARY: {usable}/{len(queries)} queries returned usable results")
     return 0

@@ -71,6 +71,25 @@ is preserved as a special case -- if partitioning would drop every
 result, that is still treated as "this provider's response looks like
 a throttled or decoy batch" and the whole batch is discarded so the
 next provider gets a chance instead.
+
+Title-preserving results (1.0.0-beta.8)
+------------------------------------------
+Every provider here already parses out a result's displayed anchor
+text (used internally for the relatedness check above), but
+``search_public_web()`` used to discard it before returning, handing
+``web/crawler.py`` a bare list of URLs. That was the root cause of a
+long-standing, explicitly documented limitation ("Public web ranking
+still evaluates URLs only. Page titles and search-result snippets are
+not yet incorporated into ranking decisions.") -- the titles existed in
+memory for a few lines and were then thrown away.
+
+``search_public_web()`` now accepts an optional ``with_titles`` flag.
+The default (``False``) preserves the exact prior return type and
+behavior for existing callers (``list[str]`` of URLs). When
+``with_titles=True``, it instead returns ``list[tuple[str, str]]`` of
+``(url, title)`` pairs, which ``web/crawler.py`` uses to fold a
+result's own title into its relevance scoring -- see that module's
+docstring for the ranking-side half of this change.
 """
 from __future__ import annotations
 
@@ -83,9 +102,9 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
-from brisart_ai.blocklist import is_blocked_web_host
+from brisart_ai.blocklist import FUNCTION_WORDS, is_blocked_web_host
 from brisart_ai.util import normalize_url
 from brisart_ai.web.fetcher import MAX_PAGE_BYTES, REQUEST_TIMEOUT
 from brisart_ai.web.policy import USER_AGENT
@@ -145,7 +164,6 @@ _IGNORED_SCHEMES = (
 # also ask", related searches, or footer links. Grabbing every anchor on
 # a results page is what caused BrisartAI to ingest dictionary-definition
 # widgets (e.g. results for the word "many") instead of the real answers.
-
 _RESULT_LINK_CLASSES = (
     "result__a",       # DuckDuckGo HTML organic result title
     "result-link",     # DuckDuckGo Lite organic result title
@@ -154,7 +172,6 @@ _RESULT_LINK_CLASSES = (
 
 # Header tags that wrap organic result titles on providers (notably
 # Bing) where the result anchor itself carries no distinctive class.
-
 _RESULT_TITLE_TAGS = (
     "h2",
     "h3",
@@ -166,21 +183,29 @@ _RESULT_TITLE_TAGS = (
 # the same STOPWORDS list used for ranking weight in knowledge/ranker.py
 # -- it exists purely to filter query terms before a raw substring check
 # against a provider's returned URL/title text.
-FUNCTION_WORDS = {
-    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
-    "has", "have", "he", "her", "his", "how", "i", "in", "is", "it",
-    "its", "many", "me", "much", "my", "of", "on", "or", "our", "she",
-    "that", "the", "their", "them", "they", "this", "to", "was", "we",
-    "were", "what", "when", "where", "which", "who", "why", "will",
-    "with", "you", "your", "does", "did", "do", "give", "give me",
-}
+#
+# 1.0.0-beta.9: this used to be a second, hand-maintained copy of a
+# function-word list, separate from -- and silently out of sync with --
+# brisart_ai.blocklist.FUNCTION_WORDS (the canonical list, already
+# consolidated there for exactly this reason: see that module's
+# docstring, "previously each kept its own copy and they had drifted out
+# of sync"). This local copy was missing common words present in the
+# shared list (e.g. "about", "into", "over"), which meant a query like
+# "give me info about cats" treated "about" as a meaningful topic term
+# and could mark an off-topic result "related" merely for also
+# containing the word "about". Importing the shared list directly closes
+# that gap and guarantees this module can never drift from it again. It
+# also happens to fix a second, smaller issue for free: the previous
+# local copy included a two-word "give me" entry that could never match
+# anything, since query terms are tokenized into single words before
+# this set is consulted -- the shared list has no such dead entries.
+
 
 
 class _ResultLinkParser(HTMLParser):
     """Collect only *organic search result* anchor URLs.
 
     An anchor is treated as an organic result when either:
-
     * its ``class`` attribute matches a known result-link class
       (DuckDuckGo HTML / Lite), or
     * it is nested inside an ``<h2>``/``<h3>`` result-title heading
@@ -622,8 +647,10 @@ def _deduplicate(
 
     Titles ride along with each URL so provider-level relevance checks
     can inspect the result text a provider actually displayed, not just
-    the link target. Titles are dropped again at the public boundary in
-    :func:`search_public_web`.
+    the link target, and so ``search_public_web(with_titles=True)`` can
+    hand real titles on to ``web/crawler.py`` for title-aware ranking.
+    Titles are dropped again at the public boundary in
+    :func:`search_public_web` unless ``with_titles=True`` is requested.
     """
     deduplicated: List[Tuple[str, str]] = []
     seen = set()
@@ -978,7 +1005,6 @@ def _extract_result_links(
         parser.close()
     except Exception:
         return []
-
     results: List[WebResult] = []
     seen_urls = set()
     for href, title, snippet in parser.candidates:
@@ -1045,7 +1071,6 @@ def _run_extra_provider(
         return ProviderOutcome(
             debug_note=f"WARN: {provider_label} request failed ({exc})."
         )
-
     if _looks_like_challenge_page(raw_html):
         return ProviderOutcome(
             debug_note=(
@@ -1053,7 +1078,6 @@ def _run_extra_provider(
                 "consent page."
             )
         )
-
     results = _extract_result_links(raw_html, engine_host, limit)
     if not results:
         return ProviderOutcome(
@@ -1253,8 +1277,23 @@ def _search_wikipedia_api(
 def search_public_web(
     query: str,
     limit: int = 5,
-) -> List[str]:
-    """Search public providers and return normalized result URLs."""
+    with_titles: bool = False,
+) -> Union[List[str], List[Tuple[str, str]]]:
+    """Search public providers and return normalized results.
+
+    By default (``with_titles=False``) this returns a plain
+    ``list[str]`` of normalized result URLs, exactly as before -- every
+    existing caller of this function keeps working unchanged.
+
+    When ``with_titles=True``, this instead returns ``list[tuple[str,
+    str]]`` of ``(url, title)`` pairs, preserving the displayed anchor
+    text each provider returned for its result. ``web/crawler.py`` uses
+    this to fold a result's title into its relevance scoring alongside
+    the URL, since many results (news articles, non-wiki pages) carry
+    their most meaningful words in the title rather than in an opaque
+    URL slug or numeric ID. See the module docstring's "Title-preserving
+    results" section for the full rationale.
+    """
     cleaned_query = " ".join(
         str(query or "").split()
     )
@@ -1362,8 +1401,11 @@ def search_public_web(
             "No usable public search results were returned by any "
             "available provider."
         )
-    # Titles exist only so provider-level relevance checks can inspect
-    # displayed result text; callers still receive plain URLs.
+    if with_titles:
+        return list(collected)
+    # Titles exist only so provider-level relevance checks (and, when
+    # requested above, web/crawler.py's title-aware ranking) can inspect
+    # displayed result text; the default return remains plain URLs.
     return [url for url, _title in collected]
 
 

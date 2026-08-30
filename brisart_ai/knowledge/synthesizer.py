@@ -42,6 +42,7 @@ from brisart_ai.util import split_sentences, tokenize
 Document = Dict[str, object]
 Candidate = Tuple[float, int, str, Document]
 
+
 # -- query-level intent detection ---------------------------------------
 # Query classification is delegated entirely to brisart_ai.intent so
 # there is exactly one place that decides what KIND of question a query
@@ -68,17 +69,32 @@ def query_wants_reason(query: str) -> bool:
 
 
 # -- sentence-level signal detection -------------------------------------
+
 # A bare digit anywhere in a sentence.
 _HAS_DIGIT = re.compile(r"\d")
 
 # A digit followed by a scale/unit word -- a strong signal that the
 # sentence states an actual quantity (e.g. "74 million cats",
-# "25 percent of households").
+# "25 percent of households", "$1.2 billion", "3,200 km", "42 kg").
+#
+# 1.0.0-beta.8: extended past the original population/demographic unit
+# set to also cover currency, distance, mass, and time units, plus a
+# leading "$" or "€"/"£" sign directly against the digits. The original
+# list under-served statistic questions whose answer is a dollar figure,
+# a distance, or a weight rather than a population count -- e.g. "how
+# much does a blue whale weigh" or "how much did the Louisiana Purchase
+# cost" previously had no unit-word match at all and fell back to the
+# much weaker bare-digit signal.
 _HAS_QUANTITY = re.compile(
-    r"\d[\d,\.]*\s*"
-    r"(million|billion|thousand|percent|%|households|"
+    r"[$€£]\s*\d[\d,\.]*"
+    r"|\d[\d,\.]*\s*"
+    r"(million|billion|trillion|thousand|percent|%|households|"
     r"people|cats|dogs|pets|residents|adults|users|"
-    r"estimated|approximately)",
+    r"estimated|approximately|dollars?|usd|"
+    r"kilometers?|km|miles?|mi\b|meters?|metres?|feet|ft\b|"
+    r"kilograms?|kg|pounds?|lbs?\b|tons?|tonnes?|"
+    r"years?|months?|weeks?|days?|hours?|minutes?|seconds?|"
+    r"calories|degrees)",
     re.IGNORECASE,
 )
 
