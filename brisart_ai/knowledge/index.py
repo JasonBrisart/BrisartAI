@@ -1,4 +1,32 @@
-"""SQLite knowledge index for BrisartAI."""
+"""brisart_ai/knowledge/index.py
+
+The SQLite-backed store every indexed file, web page, and note lands
+in. Two tables: `sources` (type, location, title, full text, content
+hash, size, extension, timestamp) and `terms` (flat term-frequency rows
+keyed by `(term, source_id)`, read directly by knowledge/ranker.py for
+TF-IDF scoring). Three writers call `add_source()`: knowledge/ingest.py,
+web/crawler.py, and knowledge/vault.py's note mirroring.
+
+The database is anchored to the project root (`parents[2]` from this
+file: knowledge/index.py -> brisart_ai/ -> project root) so it always
+lands at `<project root>/brisart_ai_index.sqlite3` regardless of the
+working directory the app was launched from. `check_same_thread=False`
+because background web-research threads share this connection with the
+main-thread UI, serialized at the app level via `BrisartApp._busy`.
+
+`add_source()` **upserts by a stable key** (hash of `source_type +
+location`) -- re-adding the same file or re-crawling the same URL always
+fully replaces both the sources row and every term row for it, so
+nothing stale from a previous version of that source lingers. It raises
+`ValueError` for a missing type/location (unrecoverable metadata) but
+just returns `False` for empty text (an ordinary, expected outcome
+during bulk ingestion, not an error).
+
+`purge_junk_web_sources()` sweeps stale dictionary/definition pages out
+of the index using the shared blocklist policy, and only ever touches
+`source_type = 'web'` rows -- local files and notes are never subject to
+that policy.
+"""
 from __future__ import annotations
 
 import collections
@@ -9,10 +37,6 @@ from typing import Optional
 from brisart_ai.blocklist import is_junk_web_source
 from brisart_ai.util import now_ts, stable_hash, tokenize
 
-# Anchor the database to the project root (the folder that contains the
-# brisart_ai package) so it is always created in the same, easy-to-find
-# place -- right next to brisartai.py -- no matter which directory you
-# launch BrisartAI from.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = str(_PROJECT_ROOT / "brisart_ai_index.sqlite3")
 
@@ -22,11 +46,6 @@ class Index:
 
     def __init__(self, path: str = DEFAULT_DB):
         self.path = str(path)
-        # check_same_thread=False: the desktop UI runs web research on a
-        # background thread (see ui/app.py) while this connection is
-        # created on the main thread. Only one request is ever in flight
-        # at a time (guarded by BrisartApp._busy), so access is already
-        # serialized at the application level.
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
@@ -34,7 +53,6 @@ class Index:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        """Create the core index schema when needed."""
         self.conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS sources (
@@ -58,27 +76,19 @@ class Index:
                     REFERENCES sources(id)
                     ON DELETE CASCADE
             );
-            CREATE INDEX IF NOT EXISTS idx_terms_term
-                ON terms(term);
-            CREATE INDEX IF NOT EXISTS idx_sources_type
-                ON sources(source_type);
-            CREATE INDEX IF NOT EXISTS idx_sources_location
-                ON sources(location);
-            CREATE INDEX IF NOT EXISTS idx_sources_indexed_at
-                ON sources(indexed_at);
+            CREATE INDEX IF NOT EXISTS idx_terms_term ON terms(term);
+            CREATE INDEX IF NOT EXISTS idx_sources_type ON sources(source_type);
+            CREATE INDEX IF NOT EXISTS idx_sources_location ON sources(location);
+            CREATE INDEX IF NOT EXISTS idx_sources_indexed_at ON sources(indexed_at);
             """
         )
         self.conn.commit()
 
     def purge_junk_web_sources(self) -> int:
-        """Delete stale dictionary and off-topic web rows from the index."""
+        """Delete stale dictionary/off-topic web rows left by earlier builds."""
         try:
             rows = self.conn.execute(
-                """
-                SELECT id, location
-                FROM sources
-                WHERE source_type = 'web'
-                """
+                "SELECT id, location FROM sources WHERE source_type = 'web'"
             ).fetchall()
         except sqlite3.Error:
             return 0
@@ -100,8 +110,8 @@ class Index:
             )
         return len(doomed)
 
-    # Backwards-compatible alias for the previous method name.
     def purge_blocked_web_sources(self) -> int:
+        """Backwards-compatible alias for purge_junk_web_sources()."""
         return self.purge_junk_web_sources()
 
     def add_source(
@@ -114,39 +124,30 @@ class Index:
         size_bytes: int = 0,
         extension: str = "",
     ) -> bool:
-        """Add or update an indexed source.
-
-        Returns True when non-empty text was indexed.
-        """
+        """Add or update an indexed source. True when non-empty text was indexed."""
         cleaned_type = str(source_type or "").strip()
         cleaned_location = str(location or "").strip()
         cleaned_title = str(title or "").strip()
         cleaned_text = str(text or "").strip()
         cleaned_hash = str(content_hash or "").strip()
         cleaned_extension = str(extension or "").strip().lower()
+
         if not cleaned_type:
             raise ValueError("source_type cannot be empty")
         if not cleaned_location:
             raise ValueError("location cannot be empty")
         if not cleaned_text:
             return False
-        source_key = stable_hash(
-            cleaned_type + "|" + cleaned_location
-        )
+
+        source_key = stable_hash(cleaned_type + "|" + cleaned_location)
         indexed_at = now_ts()
+
         with self.conn:
             self.conn.execute(
                 """
                 INSERT INTO sources(
-                    source_key,
-                    source_type,
-                    location,
-                    title,
-                    text,
-                    content_hash,
-                    size_bytes,
-                    extension,
-                    indexed_at
+                    source_key, source_type, location, title, text,
+                    content_hash, size_bytes, extension, indexed_at
                 )
                 VALUES(?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(source_key) DO UPDATE SET
@@ -160,114 +161,60 @@ class Index:
                     indexed_at = excluded.indexed_at
                 """,
                 (
-                    source_key,
-                    cleaned_type,
-                    cleaned_location,
-                    cleaned_title,
-                    cleaned_text,
-                    cleaned_hash,
-                    max(0, int(size_bytes or 0)),
-                    cleaned_extension,
+                    source_key, cleaned_type, cleaned_location,
+                    cleaned_title, cleaned_text, cleaned_hash,
+                    max(0, int(size_bytes or 0)), cleaned_extension,
                     indexed_at,
                 ),
             )
             row = self.conn.execute(
-                """
-                SELECT id
-                FROM sources
-                WHERE source_key = ?
-                """,
+                "SELECT id FROM sources WHERE source_key = ?",
                 (source_key,),
             ).fetchone()
             if row is None:
-                raise RuntimeError(
-                    "Source was written but could not be retrieved"
-                )
+                raise RuntimeError("Source was written but could not be retrieved")
             source_id = int(row[0])
+
             self.conn.execute(
-                """
-                DELETE FROM terms
-                WHERE source_id = ?
-                """,
-                (source_id,),
+                "DELETE FROM terms WHERE source_id = ?", (source_id,)
             )
+
             counts = collections.Counter(
-                tokenize(
-                    cleaned_title
-                    + " "
-                    + cleaned_location
-                    + " "
-                    + cleaned_text
-                )
+                tokenize(cleaned_title + " " + cleaned_location + " " + cleaned_text)
             )
             if counts:
                 self.conn.executemany(
-                    """
-                    INSERT OR REPLACE INTO terms(
-                        term,
-                        source_id,
-                        tf
-                    )
-                    VALUES(?,?,?)
-                    """,
+                    "INSERT OR REPLACE INTO terms(term, source_id, tf) VALUES(?,?,?)",
                     [
-                        (
-                            term,
-                            source_id,
-                            int(term_frequency),
-                        )
-                        for term, term_frequency
-                        in counts.items()
+                        (term, source_id, int(term_frequency))
+                        for term, term_frequency in counts.items()
                     ],
                 )
         return True
 
-    def source_count(
-        self,
-        source_type: Optional[str] = None,
-    ) -> int:
-        """Return the total number of indexed sources."""
+    def source_count(self, source_type: Optional[str] = None) -> int:
         if source_type:
             row = self.conn.execute(
-                """
-                SELECT COUNT(*)
-                FROM sources
-                WHERE source_type = ?
-                """,
+                "SELECT COUNT(*) FROM sources WHERE source_type = ?",
                 (source_type,),
             ).fetchone()
         else:
-            row = self.conn.execute(
-                """
-                SELECT COUNT(*)
-                FROM sources
-                """
-            ).fetchone()
+            row = self.conn.execute("SELECT COUNT(*) FROM sources").fetchone()
         return int(row[0] if row else 0)
 
     def clear(self) -> None:
-        """Remove all indexed sources and terms."""
         with self.conn:
             self.conn.execute("DELETE FROM terms")
             self.conn.execute("DELETE FROM sources")
 
     def close(self) -> None:
-        """Close the SQLite connection."""
         self.conn.close()
 
     def __enter__(self) -> "Index":
         return self
 
-    def __exit__(
-        self,
-        exception_type,
-        exception_value,
-        traceback,
-    ) -> None:
+    def __exit__(self, exception_type, exception_value, traceback) -> None:
         self.close()
 
 
-__all__ = [
-    "DEFAULT_DB",
-    "Index",
-]
+__all__ = ["DEFAULT_DB", "Index"]

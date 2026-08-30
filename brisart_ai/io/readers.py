@@ -1,7 +1,20 @@
-"""Local file readers for BrisartAI.
+"""brisart_ai/io/readers.py
 
-All readers use the Python standard library. Complex container formats are
-handled with best-effort text extraction rather than perfect rendering.
+File-type dispatch for local ingestion. `is_supported()` decides which
+files BrisartAI can read at all; `iter_supported_files()` walks a mix of
+individual paths and folders (recursively, de-duplicated by resolved
+path) to find them; `read_file()` extracts searchable text from any one
+supported file, delegating to io/binary_readers.py for
+.docx/.pptx/.xlsx/.odt/.pdf and io/extractor.py for .html/.csv, with a
+few lighter-weight formats (.json, .jsonl, .rtf, .tsv) handled inline
+below.
+
+`iter_supported_files()` silently skips anything it can't resolve or
+access (bad path, permission error mid-walk) rather than aborting the
+whole ingestion run. `.rtf` gets a deliberately crude regex stripper --
+not a real RTF parser, just enough to make prose searchable. `.json`/
+`.jsonl` are pretty-printed when parseable and returned as-is otherwise
+(never raises on invalid JSON).
 """
 from __future__ import annotations
 
@@ -21,82 +34,26 @@ from brisart_ai.io.extractor import csv_to_text, html_to_text
 from brisart_ai.util import safe_read_text
 
 TEXT_EXTENSIONS = {
-    ".txt",
-    ".md",
-    ".markdown",
-    ".rst",
-    ".py",
-    ".pyw",
-    ".html",
-    ".htm",
-    ".csv",
-    ".tsv",
-    ".log",
-    ".ini",
-    ".cfg",
-    ".conf",
-    ".toml",
-    ".xml",
-    ".svg",
-    ".yaml",
-    ".yml",
-    ".json",
-    ".jsonl",
-    ".ndjson",
-    ".css",
-    ".js",
-    ".mjs",
-    ".cjs",
-    ".ts",
-    ".tsx",
-    ".jsx",
-    ".java",
-    ".c",
-    ".h",
-    ".cpp",
-    ".hpp",
-    ".cc",
-    ".cs",
-    ".go",
-    ".rs",
-    ".sh",
-    ".bash",
-    ".zsh",
-    ".ps1",
-    ".bat",
-    ".cmd",
-    ".sql",
-    ".tex",
-    ".rtf",
-    ".srt",
-    ".vtt",
-    ".properties",
-    ".env",
-    ".gitignore",
-    ".dockerfile",
+    ".txt", ".md", ".markdown", ".rst", ".py", ".pyw", ".html", ".htm",
+    ".csv", ".tsv", ".log", ".ini", ".cfg", ".conf", ".toml", ".xml",
+    ".svg", ".yaml", ".yml", ".json", ".jsonl", ".ndjson", ".css",
+    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".java", ".c", ".h",
+    ".cpp", ".hpp", ".cc", ".cs", ".go", ".rs", ".sh", ".bash", ".zsh",
+    ".ps1", ".bat", ".cmd", ".sql", ".tex", ".rtf", ".srt", ".vtt",
+    ".properties", ".env", ".gitignore", ".dockerfile",
 }
 
-BINARY_TEXT_EXTENSIONS = {
-    ".docx",
-    ".pptx",
-    ".xlsx",
-    ".odt",
-    ".pdf",
-}
+BINARY_TEXT_EXTENSIONS = {".docx", ".pptx", ".xlsx", ".odt", ".pdf"}
 
 SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | BINARY_TEXT_EXTENSIONS
 
+# Well-known extensionless filenames, matched case-insensitively.
 SUPPORTED_EXTENSIONLESS_NAMES = {
-    "dockerfile",
-    "makefile",
-    "license",
-    "readme",
-    "changelog",
+    "dockerfile", "makefile", "license", "readme", "changelog",
 }
 
 
 def is_supported(path: Path) -> bool:
-    """Return whether BrisartAI has a reader for the supplied path."""
     suffix = path.suffix.lower()
     name = path.name.lower()
     return (
@@ -106,7 +63,7 @@ def is_supported(path: Path) -> bool:
 
 
 def iter_supported_files(paths: Iterable[str]) -> Iterator[Path]:
-    """Yield supported files from individual paths and folders."""
+    """Yield supported files from a mix of individual paths and folders."""
     seen = set()
     for raw in paths:
         path = Path(raw).expanduser()
@@ -122,8 +79,7 @@ def iter_supported_files(paths: Iterable[str]) -> Iterator[Path]:
         if not path.is_dir():
             continue
         try:
-            children = path.rglob("*")
-            for child in children:
+            for child in path.rglob("*"):
                 try:
                     if child.is_file() and is_supported(child):
                         resolved = child.resolve()
@@ -139,12 +95,7 @@ def iter_supported_files(paths: Iterable[str]) -> Iterator[Path]:
 def _pretty_json(raw: str) -> str:
     try:
         parsed = json.loads(raw)
-        return json.dumps(
-            parsed,
-            indent=2,
-            sort_keys=True,
-            ensure_ascii=False,
-        )
+        return json.dumps(parsed, indent=2, sort_keys=True, ensure_ascii=False)
     except (json.JSONDecodeError, TypeError):
         return raw
 
@@ -170,7 +121,9 @@ def read_file(path: Path) -> str:
         return read_odt(path)
     if ext == ".pdf":
         return read_pdf_best_effort(path)
+
     raw = safe_read_text(path)
+
     if ext in {".html", ".htm", ".svg"}:
         _title, text, _links = html_to_text(raw)
         return text

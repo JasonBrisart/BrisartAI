@@ -1,28 +1,32 @@
-"""GUI-facing service layer for BrisartAI.
+"""brisart_ai/ui/service.py
 
-Widgets in ui/ never touch Index, SessionMemory, or ResearchSettings
-directly. Everything routes through BrisartService so the desktop UI
-and any future interface share the exact same backend logic (ingestion,
-search, settings, notes, etc.) instead of duplicating it.
+The backend facade every UI widget goes through instead of touching
+`Index`/`SessionMemory`/`ResearchSettings` directly, so ingestion,
+search, settings, and notes have exactly one implementation shared by
+the desktop UI (and any future interface).
 
-Notes are stored through knowledge/vault.py's add_note()/list_notes()/
-search_notes() helpers, and are also mirrored into the main source
-index by add_note() itself so they participate in fully-ranked search
-via core/conversation.py. Notes saved before that mirroring existed are
-brought up to date once at startup via reindex_missing_notes(), so
-existing notes gain ranked search automatically with nothing for the
-user to do. Collections, entity extraction, and timeline features from
-vault.py are intentionally not wired in here to keep the surface area
-small.
+Construction order matters: `Index`/`SessionMemory` are built with NO
+try/except around them, deliberately. A locked, read-only, or otherwise
+unopenable database must propagate straight out of `__init__` uncaught,
+so `ui/app.py`'s `run()` can catch it in exactly one place and show a
+friendly dialog instead of a raw traceback. Two cleanup passes run at
+startup as a side effect of construction: stale dictionary/definition
+web pages get purged, and any notes saved before note-mirroring existed
+get reindexed for ranked search -- both print a summary line only when
+they actually did something, so a clean startup stays quiet.
 
-Startup failures (1.0.0-beta.9): constructing ``Index``/``SessionMemory``
-below can raise a raw ``sqlite3`` exception if the database file is
-locked by another running copy of BrisartAI, sits on a read-only path,
-or is otherwise unopenable. This class deliberately does NOT catch that
-exception -- it is allowed to propagate out of ``__init__`` uncaught, on
-purpose, so that a single call site can present a friendly dialog
-instead of a raw console traceback. See ``ui/app.py``'s ``run()`` for
-where that single catch now lives.
+`ask()` is the one method `ui/app.py`'s background worker thread calls.
+When `force_web=None` (ordinary typed questions), the web-search
+decision is deferred to the `auto_web_research` setting; the explicit
+"Research Web" action passes `force_web=True` to force a fresh search
+regardless. Diagnostic print() output from the crawler/search/policy
+layers during a call is captured (via `contextlib.redirect_stdout`) and
+filtered down to just the WARN/SKIP/ERROR lines worth surfacing in the
+chat transcript, available afterward as `last_diagnostics`.
+
+Notes route through `knowledge/vault.py`'s helpers; collections, entity
+extraction, and timeline features from vault.py are intentionally not
+wired in here to keep the UI's surface small.
 """
 from __future__ import annotations
 
@@ -44,10 +48,8 @@ from brisart_ai.knowledge.vault import (
 )
 from brisart_ai.web.crawler import web_search_and_ingest
 
-# Diagnostic lines are only worth surfacing to the user if they contain
-# one of these markers -- the rest of the crawl/search log (per-URL
-# fetch lines, "OK: N chars" progress, etc.) is normal verbose noise
-# that belongs in the console, not the chat transcript.
+# Only these markers are worth surfacing to the user; everything else
+# printed during a search/crawl is normal verbose progress output.
 _DIAGNOSTIC_MARKERS = ("WARN", "SKIP", "ERROR")
 _MAX_DIAGNOSTIC_LINES = 5
 
@@ -57,13 +59,9 @@ class BrisartService:
 
     def __init__(self, db_path: str = DEFAULT_DB):
         self.db_path = db_path
-        # Deliberately unguarded: see the module docstring's "Startup
-        # failures" note. A locked/unopenable database must propagate
-        # to ui/app.py's run(), not be swallowed here.
+        # Deliberately unguarded -- see module docstring.
         self.index = Index(db_path)
 
-        # Remove any stale dictionary/definition web pages left in the
-        # database by earlier builds so they cannot resurface in answers.
         removed = self.index.purge_blocked_web_sources()
         if removed:
             print(
@@ -71,8 +69,6 @@ class BrisartService:
                 "dictionary/definition page(s) from the index."
             )
 
-        # Bring any notes saved before note-mirroring existed up to date,
-        # so previously-saved notes silently gain full ranked search too.
         reindexed = reindex_missing_notes(self.index)
         if reindexed:
             print(
@@ -82,21 +78,19 @@ class BrisartService:
 
         self.memory = SessionMemory(db_path)
         self.settings = ResearchSettings()
-        # Guards stdout redirection below -- only one ask() should be
-        # capturing print() output at a time. The app's _busy flag
+
+        # Guards stdout redirection in ask(); the app's _busy flag
         # already prevents overlapping requests from the UI, but this
-        # lock keeps the service safe even if called from elsewhere.
+        # keeps the service itself safe if called from elsewhere too.
         self._stdout_lock = threading.Lock()
         self.last_diagnostics: List[str] = []
 
-    # -- status ---------------------------------------------------------
     def counts(self) -> Tuple[int, int, int]:
         total = self.index.source_count()
         files = self.index.source_count("file")
         web = self.index.source_count("web")
         return total, files, web
 
-    # -- conversation -----------------------------------------------------
     def ask(
         self,
         text: str,
@@ -106,24 +100,17 @@ class BrisartService:
     ) -> str:
         """Answer a question.
 
-        When ``force_web`` is left as ``None`` (the default for typed
-        chat questions), the decision to search the public web is taken
-        from the "Automatic Web Research" setting, so the settings
-        toggle actually has an effect again. Callers that want to
-        guarantee a fresh web search regardless of the setting -- such
-        as the explicit "Research Web" sidebar action -- should pass
-        ``force_web=True``.
-
-        Diagnostic output printed by the crawler/search/policy/fetcher
-        layers during this call is captured rather than left console-
-        only; the interesting lines (WARN/SKIP/ERROR) are available
-        afterward via ``last_diagnostics``.
+        `force_web=None` defers the web-search decision to the
+        Automatic Web Research setting; pass `force_web=True` to
+        guarantee a fresh web search regardless (the "Research Web"
+        action).
         """
         resolved_force_web = (
             self.settings.get("auto_web_research")
             if force_web is None
             else bool(force_web)
         )
+
         buffer = io.StringIO()
         with self._stdout_lock:
             with contextlib.redirect_stdout(buffer):
@@ -141,7 +128,7 @@ class BrisartService:
 
     @staticmethod
     def _extract_diagnostics(captured_output: str) -> List[str]:
-        """Pull out only the WARN/SKIP/ERROR lines worth showing the user."""
+        """Pull out just the WARN/SKIP/ERROR lines worth showing the user."""
         highlights: List[str] = []
         seen = set()
         for line in captured_output.splitlines():
@@ -158,19 +145,16 @@ class BrisartService:
                 break
         return highlights
 
-    # -- ingestion --------------------------------------------------------
     def import_paths(self, paths: List[str]) -> str:
         count = ingest_paths(paths, self.index)
         total, _files, _web = self.counts()
         return f"Ingested {count} file(s) this run. Indexed sources total: {total}"
 
-    # -- research ---------------------------------------------------------
     def research(self, query: str, limit: int = 5, depth: int = 0) -> str:
         count = web_search_and_ingest(query, self.index, limit=limit, crawl_depth=depth)
         total, _files, _web = self.counts()
         return f"Web pages indexed this run: {count}. Indexed sources total: {total}"
 
-    # -- notes ------------------------------------------------------------
     def add_note(self, title: str, body: str) -> str:
         return add_note(self.index, title, body)
 
@@ -180,7 +164,6 @@ class BrisartService:
     def search_notes(self, query: str, limit: int = 10) -> str:
         return search_notes(self.index, query, limit=limit)
 
-    # -- settings ---------------------------------------------------------------
     def toggle_setting(self, key: str) -> Tuple[str, bool]:
         resolved = self.settings.resolve_key(key)
         new_value = self.settings.toggle(resolved)
@@ -189,7 +172,6 @@ class BrisartService:
     def settings_panel_text(self) -> str:
         return self.settings.render()
 
-    # -- lifecycle --------------------------------------------------------------
     def close(self) -> None:
         self.memory.close()
         self.index.close()

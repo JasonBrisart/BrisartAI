@@ -1,4 +1,30 @@
-"""Text extraction helpers for BrisartAI."""
+"""brisart_ai/io/extractor.py
+
+Two text-extraction helpers: `html_to_text()` and `csv_to_text()`.
+web/fetcher.py calls `html_to_text()` on every fetched web page;
+io/readers.py calls it for local .html/.htm/.svg files and calls
+`csv_to_text()` for local .csv files.
+
+`HTMLTextExtractor` is an `html.parser.HTMLParser` subclass that skips
+`<script>`/`<style>`/`<svg>`/etc. entirely, inserts a newline at block-
+level tag boundaries so paragraphs and list items don't run together,
+and collects `<a href>` targets (resolved against `base_url`, de-duped,
+http(s)-only) as a side channel of discovered links for the crawler to
+follow.
+
+One deliberate special case: `<sup class="reference">[3]</sup>` -- the
+MediaWiki-style footnote marker Wikipedia and its mirrors use -- is
+skipped too. Without this, extracted article text and quoted answers
+would occasionally have a stray "[ 3 ]" glued onto the start of a
+sentence. It's scoped narrowly to `<sup>` tags carrying a
+reference/citation class, so an ordinary superscript like "10^2" is
+untouched.
+
+`csv_to_text()` converts each row to a pipe-separated line via
+`csv.reader`, falling back to a naive comma-to-pipe line split if the
+CSV is malformed enough to make `csv.reader` choke -- some searchable
+text is better than none.
+"""
 from __future__ import annotations
 
 import csv
@@ -15,56 +41,16 @@ from brisart_ai.util import normalize_url
 class HTMLTextExtractor(HTMLParser):
     """Extract readable text, page titles, and links from HTML."""
 
-    SKIP_TAGS = {
-        "script",
-        "style",
-        "noscript",
-        "svg",
-        "canvas",
-        "template",
-    }
+    SKIP_TAGS = {"script", "style", "noscript", "svg", "canvas", "template"}
 
     BLOCK_TAGS = {
-        "p",
-        "div",
-        "section",
-        "article",
-        "aside",
-        "header",
-        "footer",
-        "main",
-        "nav",
-        "br",
-        "li",
-        "ul",
-        "ol",
-        "table",
-        "tr",
-        "td",
-        "th",
-        "blockquote",
-        "pre",
-        "h1",
-        "h2",
-        "h3",
-        "h4",
-        "h5",
-        "h6",
+        "p", "div", "section", "article", "aside", "header", "footer",
+        "main", "nav", "br", "li", "ul", "ol", "table", "tr", "td",
+        "th", "blockquote", "pre", "h1", "h2", "h3", "h4", "h5", "h6",
     }
 
-    # Inline citation-marker wrappers. MediaWiki-style pages (Wikipedia
-    # and its mirrors) wrap footnote superscripts like "[3]" in
-    # <sup class="reference">...</sup>. Their text content is not part
-    # of the article's prose -- it is a citation index -- but the
-    # generic BLOCK_TAGS/SKIP_TAGS handling above has no notion of
-    # "skip this element only when it carries a particular class", so
-    # these markers were previously extracted as ordinary text and
-    # ended up leaking into indexed content and quoted answers as a
-    # stray "[ 3 ]" fragment glued onto the start of a sentence.
-    #
-    # This is intentionally scoped to <sup> (not all elements with a
-    # "reference" class) to avoid accidentally swallowing unrelated
-    # prose that happens to share the class name in other markup.
+    # MediaWiki-style citation markers, e.g. <sup class="reference">[3]</sup>.
+    # Scoped to <sup> only, so an unrelated superscript is left alone.
     REFERENCE_MARKER_TAGS = {"sup"}
     REFERENCE_MARKER_CLASSES = {"reference", "cite-bracket", "citation"}
 
@@ -79,9 +65,7 @@ class HTMLTextExtractor(HTMLParser):
         self._in_title = False
 
     def _is_reference_marker(
-        self,
-        tag: str,
-        attrs: List[Tuple[str, Optional[str]]],
+        self, tag: str, attrs: List[Tuple[str, Optional[str]]]
     ) -> bool:
         if tag not in self.REFERENCE_MARKER_TAGS:
             return False
@@ -94,9 +78,7 @@ class HTMLTextExtractor(HTMLParser):
         return False
 
     def handle_starttag(
-        self,
-        tag: str,
-        attrs: List[Tuple[str, Optional[str]]],
+        self, tag: str, attrs: List[Tuple[str, Optional[str]]]
     ) -> None:
         tag = tag.lower()
         if tag in self.SKIP_TAGS:
@@ -122,9 +104,7 @@ class HTMLTextExtractor(HTMLParser):
             self.text_parts.append("\n")
 
     def handle_startendtag(
-        self,
-        tag: str,
-        attrs: List[Tuple[str, Optional[str]]],
+        self, tag: str, attrs: List[Tuple[str, Optional[str]]]
     ) -> None:
         self.handle_starttag(tag, attrs)
         if tag.lower() in self.BLOCK_TAGS:
@@ -160,7 +140,6 @@ class HTMLTextExtractor(HTMLParser):
         self.text_parts.append(cleaned + " ")
 
     def result(self) -> Tuple[str, str, List[str]]:
-        """Return extracted title, readable text, and unique links."""
         title = " ".join(self.title_parts).strip()
         text = "".join(self.text_parts)
         text = re.sub(r"[ \t\r\f\v]+", " ", text)
@@ -176,10 +155,7 @@ class HTMLTextExtractor(HTMLParser):
         return title, text, unique_links
 
 
-def html_to_text(
-    source: str,
-    base_url: str = "",
-) -> Tuple[str, str, List[str]]:
+def html_to_text(source: str, base_url: str = "") -> Tuple[str, str, List[str]]:
     """Convert HTML into a title, readable text, and discovered links."""
     parser = HTMLTextExtractor(base_url=base_url)
     try:

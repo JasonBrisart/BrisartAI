@@ -2,6 +2,35 @@
 
 ---
 
+## [1.0.0-beta.10] - 2026-08-30
+
+### Changed
+- Rewrote the top-of-file header/docstring for all 30 files in the
+  BrisartAI package tree (`brisart_ai/` and its `core/`, `io/`,
+  `knowledge/`, `ui/`, `web/` subfolders, plus `brisartai.py` and both
+  `scripts/debug_*.py` files).
+- First pass used one rigid four-section template
+  (`Purpose` / `Communication relationships` / `Settings-parameters` /
+  `Edge-case behavior`) on every file regardless of size or complexity.
+- Second pass replaced that with documentation depth scaled to each
+  file's actual complexity instead of a forced template:
+  - **Trivial** files (`version_info.py`, `ui/theme.py`, `web/models.py`,
+    `web/stats.py`, `io/input_cleaner.py`, `brisartai.py`) — one tight
+    paragraph, no sections.
+  - **Light** files (UI widgets, `core/settings.py`,
+    `core/session_memory.py`, `knowledge/ingest.py`, `io/readers.py`) —
+    a few natural paragraphs.
+  - **Medium** files (`io/binary_readers.py`, `io/extractor.py`,
+    `knowledge/index.py`, `core/conversation.py`, `ui/service.py`,
+    `ui/app.py`, `web/fetcher.py`, `web/policy.py`, `knowledge/vault.py`,
+    both debug scripts) — prose with bolded call-outs only where earned.
+  - **Deep** files (`blocklist.py`, `intent.py`, `knowledge/ranker.py`,
+    `knowledge/synthesizer.py`, `web/crawler.py`, `web/search.py`,
+    `util.py`) — full narrative explanation of the non-obvious design
+    decisions, structured per-file rather than forced into one shape.
+
+---
+
 ## [1.0.0-beta.9] - 2026-08-30
 
 ### Fixed

@@ -1,3 +1,11 @@
+"""brisart_ai/web/stats.py
+
+`CrawlStats`: five counters for one crawl run (requested / indexed /
+duplicate / empty / error) plus a `print_summary()` for an end-of-run
+report. web/crawler.py owns the only instance, incrementing fields as
+it processes each URL. All fields default to 0, so a fresh
+`CrawlStats()` prints an honest all-zero summary rather than raising.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

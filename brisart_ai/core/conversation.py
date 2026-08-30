@@ -1,16 +1,33 @@
-"""Conversation router for BrisartAI.
+"""brisart_ai/core/conversation.py
 
-Order of logic:
-1. Clean accidental shell syntax from chat input.
-2. Search indexed local data, honoring the Local Files and Research
-   Notes settings toggles.
-3. If a fresh web search is forced (``force_web=True``), or no local
-   evidence exists and Automatic Web Research is enabled in settings,
-   search the public web and re-check for evidence.
-4. If evidence exists (local or newly fetched), synthesize a sourced
-   answer.
-5. If no evidence exists at all, answer with a simple grounding label
-   instead of a conversational fallback.
+The single answer-routing entry point: given a question, decide what to
+search and how to turn it into an answer. Flow:
+
+1. Clean accidental shell/quote syntax from the typed question.
+2. Search indexed local data (files/web/notes), scoped by which source
+   types the user's settings toggles allow.
+3. If a fresh web search was explicitly requested (`force_web=True`,
+   what the "Research Web" button sends), or local search came up empty
+   AND Automatic Web Research is on, crawl the public web and re-check.
+4. If any evidence exists -- local or freshly fetched -- synthesize a
+   sourced answer. If nothing exists at all, say so plainly instead of
+   guessing.
+
+`ui/service.py`'s `BrisartService.ask()` is the only caller. The
+`allowed_source_types` set always includes `"web"` (previously-indexed
+pages stay searchable regardless of the Local Files toggle), and adds
+`"file"`/`"note"` based on settings -- notes are mirrored into the main
+index by `knowledge/vault.py`'s `add_note()`, so they get the exact same
+TF-IDF/coverage/title/phrase/intent-aware ranking as files and web pages
+rather than a separate cruder substring scan.
+
+A web search is triggered exactly once per question -- never a forced
+search stacked on top of a redundant fallback search. When it runs and
+finds something, the answer gets a one-line "searched the web" notice;
+when it runs and finds nothing usable, a distinct message explains that
+(different cause than "nothing indexed yet" -- attempt made and failed,
+vs. no attempt made). Both the question and the answer are always
+recorded to session memory, even on the "nothing found" path.
 """
 from __future__ import annotations
 
@@ -32,34 +49,7 @@ def build_conversation_answer(
     web_limit: int = 5,
     force_web: bool = False,
 ) -> str:
-    """Build a source-grounded answer.
-
-    When ``force_web`` is True, BrisartAI always searches the public web
-    for the question first, then synthesizes an answer from whatever it
-    finds. This is what the desktop UI uses so a user can simply type a
-    question and get a web-grounded answer inline, without remembering a
-    command or toggling a setting.
-
-    When ``force_web`` is False, the older behavior applies: local
-    evidence is used first, and the public web is only searched when no
-    local evidence is found and ``auto_web_research`` is enabled.
-
-    Local search is scoped by the ``search_local_files`` and
-    ``search_notes`` settings via an explicit set of allowed source
-    types passed to ``knowledge/ranker.search()``:
-      * ``web`` is always included, so previously indexed web pages
-        remain searchable regardless of the Local Files setting -- the
-        local index never goes completely silent just because that
-        toggle is off.
-      * ``file`` is included only when ``search_local_files`` is on.
-      * ``note`` is included only when ``search_notes`` is on. Saved
-        notes are mirrored into the main source index by
-        ``knowledge/vault.add_note()``/``reindex_missing_notes()``, so
-        including "note" here gives them the exact same TF-IDF,
-        coverage, title-match, phrase-match, and intent-aware ranking
-        as files and web pages -- rather than the separate, cruder
-        substring-count merge used previously.
-    """
+    """Build a source-grounded answer to one question."""
     cleaned = normalize_shellish_input(query)
     recent = memory.recent_topics(limit=4)
 
@@ -87,12 +77,7 @@ def build_conversation_answer(
     used_web = False
     if should_search_web:
         used_web = True
-        web_search_and_ingest(
-            cleaned,
-            index,
-            limit=web_limit,
-            crawl_depth=0,
-        )
+        web_search_and_ingest(cleaned, index, limit=web_limit, crawl_depth=0)
         docs = _gather_docs()
 
     if docs:

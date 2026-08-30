@@ -1,7 +1,18 @@
-"""Tiny local session memory for BrisartAI.
+"""brisart_ai/core/session_memory.py
 
-Stores compact recent user topics instead of huge assistant outputs or
-raw shell commands.
+A tiny SQLite-backed rolling log of recent chat topics -- not full
+answers, just compressed keywords -- so core/conversation.py can hand
+`knowledge/synthesizer.py` a bit of "what has this chat been about"
+context. Shares its SQLite file with `knowledge/index.py`'s `Index` but
+owns a separate `conversation_memory` table.
+
+`check_same_thread=False` because web research runs on a background
+thread (ui/app.py) while this connection is created on the main thread;
+the app already serializes requests via `BrisartApp._busy`, so no extra
+locking was needed. `_compress()` tokenizes and caps content at 12
+terms (or 140 raw characters if tokenization finds nothing), and
+`add()` silently drops a row that compresses to nothing rather than
+storing an empty topic.
 """
 from __future__ import annotations
 
@@ -17,11 +28,6 @@ class SessionMemory:
     """SQLite-backed compact session memory."""
 
     def __init__(self, db_path: str):
-        # check_same_thread=False: web research answers are produced on a
-        # background thread (see ui/app.py) while this connection is
-        # created on the main thread. Access remains serialized at the
-        # application level (only one request in flight at a time), so no
-        # additional locking was required for correctness.
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute(
             """
@@ -57,6 +63,7 @@ class SessionMemory:
             )
 
     def recent_topics(self, limit: int = 6) -> List[str]:
+        """Most-recent, de-duplicated topics, newest first."""
         rows = self.conn.execute(
             """
             SELECT content

@@ -1,7 +1,15 @@
-"""Local file and folder ingestion for BrisartAI.
+"""brisart_ai/knowledge/ingest.py
 
-This module does exactly one thing: read supported files and add them
-to the index.
+Local file/folder ingestion: reads every supported file under one or
+more paths and adds each to the index. All file-type dispatch lives in
+io/readers.py -- this module just reads, hashes, and adds. Called from
+ui/service.py's `import_paths()` (the "Import Files" sidebar action).
+
+A file that reads as empty text is skipped and not counted. A hash
+failure is logged but doesn't block indexing (the file is still added
+with an empty content_hash, since the hash is only used for duplicate
+detection). Any read/index failure for one file is caught and logged so
+a single bad file never aborts a whole folder import.
 """
 from __future__ import annotations
 
@@ -26,15 +34,18 @@ def ingest_paths(
             if not text or not text.strip():
                 print(f"SKIPPED EMPTY: {path}")
                 continue
+
             try:
                 size_bytes = path.stat().st_size
             except OSError:
                 size_bytes = 0
+
             try:
                 content_hash = file_hash(path)
             except OSError as exc:
                 print(f"WARN: could not hash {path}: {exc}")
                 content_hash = ""
+
             indexed = index.add_source(
                 source_type="file",
                 location=str(path),

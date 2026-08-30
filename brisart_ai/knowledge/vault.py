@@ -1,22 +1,24 @@
-"""Knowledge Vault for BrisartAI.
+"""brisart_ai/knowledge/vault.py
 
-The vault adds structure on top of the raw SQLite source index.
-It provides:
-- research collections
-- local notes
-- lightweight entity extraction
-- source-to-topic relationships
-- timeline events
-- vault reports
+Structure layered on top of the raw SQLite index: research collections
+(tags grouping sources by topic), local notes, lightweight capitalized-
+phrase entity extraction, source-to-entity links, a topic timeline, and
+a vault summary report. Everything reuses the same SQLite database as
+knowledge/index.py rather than a separate store.
 
-Everything is pure Python and uses the existing BrisartAI SQLite database.
+The one piece worth calling out up front: notes are mirrored into the
+main `sources` table (`source_type="note"`, see `_index_note()`) so they
+get ranked by the exact same TF-IDF/coverage/title/phrase/intent-aware
+model as files and web pages, instead of the older separate substring-
+count scan (`search_notes_as_documents()`, kept below only as a
+lightweight legacy path -- the main conversation pipeline never calls
+it). `reindex_missing_notes()` runs once at service startup to bring
+notes saved before mirroring existed up to date, with no user action
+needed.
 
-Notes are mirrored into the main source index (source_type="note") so
-they are ranked with the exact same TF-IDF, coverage, title-match,
-phrase-match, and intent-aware model used for imported files and
-crawled web pages, instead of the separate, much cruder substring-count
-scan this module used to rely on exclusively. See ``_index_note()`` and
-``reindex_missing_notes()`` below.
+Every public function calls `init_vault_schema(index)` defensively at
+the top, so nothing here depends on the caller remembering to
+initialize the vault tables first.
 """
 from __future__ import annotations
 
@@ -25,13 +27,11 @@ from typing import Dict, List, Optional, Tuple
 
 from brisart_ai.util import now_ts, tokenize
 
-ENTITY_RE = re.compile(
-    r"\b[A-Z][A-Za-z0-9_]*(?:[ -][A-Z][A-Za-z0-9_]*){0,4}\b"
-)
+ENTITY_RE = re.compile(r"\b[A-Z][A-Za-z0-9_]*(?:[ -][A-Z][A-Za-z0-9_]*){0,4}\b")
 
 
 def init_vault_schema(index) -> None:
-    """Create vault tables if they do not exist."""
+    """Create vault tables if they don't exist yet. Safe to call repeatedly."""
     index.conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS collections (
@@ -90,32 +90,27 @@ def init_vault_schema(index) -> None:
 
 
 def create_collection(index, name: str, description: str = "") -> str:
-    """Create a research collection."""
+    """Create (or no-op if it already exists) a research collection."""
     init_vault_schema(index)
     cleaned_name = name.strip()
     if not cleaned_name:
         return "Collection name cannot be empty."
     with index.conn:
         index.conn.execute(
-            """
-            INSERT OR IGNORE INTO collections(name, description, created_at)
-            VALUES(?,?,?)
-            """,
+            "INSERT OR IGNORE INTO collections(name, description, created_at) VALUES(?,?,?)",
             (cleaned_name, description.strip(), now_ts()),
         )
     return f"Collection ready: {cleaned_name}"
 
 
 def list_collections(index) -> str:
-    """List all research collections."""
     init_vault_schema(index)
     rows = index.conn.execute(
         """
         SELECT collections.id, collections.name, collections.description,
                COUNT(source_collections.source_id) AS source_count
         FROM collections
-        LEFT JOIN source_collections
-            ON source_collections.collection_id = collections.id
+        LEFT JOIN source_collections ON source_collections.collection_id = collections.id
         GROUP BY collections.id
         ORDER BY collections.name
         """
@@ -135,73 +130,55 @@ def list_collections(index) -> str:
 
 def _collection_id(index, name: str) -> Optional[int]:
     row = index.conn.execute(
-        "SELECT id FROM collections WHERE name=?",
-        (name.strip(),),
+        "SELECT id FROM collections WHERE name=?", (name.strip(),)
     ).fetchone()
-    if not row:
-        return None
-    return int(row[0])
+    return int(row[0]) if row else None
 
 
 def add_sources_to_collection(index, collection_name: str, query: str) -> str:
     """Attach matching indexed sources to a collection.
 
-    Matching is intentionally simple and inspectable:
-    - checks title
-    - checks location
-    - checks text
+    Matching is a simple substring check against title/location/text --
+    intentionally basic and inspectable, not a ranked search.
     """
     init_vault_schema(index)
     create_collection(index, collection_name)
     cid = _collection_id(index, collection_name)
     if cid is None:
         return f"Could not find collection: {collection_name}"
+
     terms = tokenize(query)
     if not terms:
         return "No searchable terms were provided."
-    rows = index.conn.execute(
-        """
-        SELECT id, title, location, text
-        FROM sources
-        """
-    ).fetchall()
+
+    rows = index.conn.execute("SELECT id, title, location, text FROM sources").fetchall()
+
     matched = []
     for source_id, title, location, text in rows:
         blob = f"{title or ''} {location or ''} {text or ''}".lower()
         if any(term in blob for term in terms):
             matched.append(source_id)
+
     with index.conn:
         for source_id in matched:
             index.conn.execute(
                 """
-                INSERT OR IGNORE INTO source_collections(
-                    source_id,
-                    collection_id,
-                    created_at
-                )
+                INSERT OR IGNORE INTO source_collections(source_id, collection_id, created_at)
                 VALUES(?,?,?)
                 """,
                 (source_id, cid, now_ts()),
             )
-    return (
-        f"Collection updated: {collection_name}\n"
-        f"Matched sources added: {len(matched)}"
-    )
+
+    return f"Collection updated: {collection_name}\nMatched sources added: {len(matched)}"
 
 
 def _index_note(index, note_id: int, title: str, body: str) -> None:
     """Mirror a saved note into the main source index as a ranked source.
 
-    Notes previously lived only in the vault's own ``notes`` table and
-    were reachable only through ``search_notes_as_documents()``'s ad hoc
-    substring-count scan, which bypassed TF-IDF weighting, coverage
-    scoring, title/phrase matching, and intent-aware ranking entirely.
-    Indexing the note here means a saved note now competes for ranking
-    exactly like an imported file or crawled web page -- through
-    ``knowledge/ranker.search()`` -- while still being gated by the same
-    ``search_notes`` setting in ``core/conversation.py``. The location
-    ``note:<id>`` is stable, so re-adding never creates duplicate index
-    rows (``Index.add_source`` upserts by source_key).
+    Location `note:<id>` is stable, so re-adding never creates duplicate
+    rows (Index.add_source upserts by source_key). This is what lets a
+    saved note compete for ranking exactly like an imported file or
+    crawled web page, through knowledge/ranker.search().
     """
     location = f"note:{note_id}"
     index.add_source(
@@ -215,15 +192,12 @@ def _index_note(index, note_id: int, title: str, body: str) -> None:
 
 
 def reindex_missing_notes(index) -> int:
-    """Ensure every saved note is mirrored into the main source index.
+    """Mirror any note missing from the main source index.
 
-    Notes saved before note-mirroring existed (or written by any older
-    build) are present only in the ``notes`` table and invisible to
-    ``knowledge/ranker.search()``. Called once at service startup
-    (``ui/service.py``), this walks all saved notes and indexes any that
-    are missing, so existing notes silently gain full ranked search the
-    next time the app runs -- no re-saving, no new setting, nothing for
-    the user to do.
+    Notes saved before note-mirroring existed are present only in the
+    `notes` table and invisible to knowledge/ranker.search(). Called once
+    at service startup, so old notes silently gain full ranked search
+    with nothing for the user to do.
     """
     init_vault_schema(index)
     rows = index.conn.execute("SELECT id, title, body FROM notes").fetchall()
@@ -231,12 +205,7 @@ def reindex_missing_notes(index) -> int:
     for note_id, title, body in rows:
         location = f"note:{note_id}"
         existing = index.conn.execute(
-            """
-            SELECT 1
-            FROM sources
-            WHERE source_type = 'note' AND location = ?
-            LIMIT 1
-            """,
+            "SELECT 1 FROM sources WHERE source_type = 'note' AND location = ? LIMIT 1",
             (location,),
         ).fetchone()
         if existing is None:
@@ -246,23 +215,19 @@ def reindex_missing_notes(index) -> int:
 
 
 def add_note(index, title: str, body: str, collection_name: str = "") -> str:
-    """Add a local research note.
-
-    The note is saved to the vault's own ``notes`` table (the source of
-    truth for ``list_notes()``/``search_notes()`` and any future
-    per-note UI), and is also mirrored into the main source index via
-    ``_index_note()`` so it immediately participates in ranked search
-    alongside files and web pages.
-    """
+    """Save a note to the vault's notes table and mirror it into the ranked index."""
     init_vault_schema(index)
+
     cid = None
     if collection_name.strip():
         create_collection(index, collection_name)
         cid = _collection_id(index, collection_name)
+
     cleaned_title = title.strip() or "Untitled Note"
     cleaned_body = body.strip()
     if not cleaned_body:
         return "Note body cannot be empty."
+
     stamp = now_ts()
     with index.conn:
         cursor = index.conn.execute(
@@ -273,12 +238,12 @@ def add_note(index, title: str, body: str, collection_name: str = "") -> str:
             (cleaned_title, cleaned_body, cid, stamp, stamp),
         )
         note_id = cursor.lastrowid
+
     _index_note(index, note_id, cleaned_title, cleaned_body)
     return f"Note saved: {cleaned_title}"
 
 
 def list_notes(index, limit: int = 20) -> str:
-    """List recent notes."""
     init_vault_schema(index)
     rows = index.conn.execute(
         """
@@ -299,27 +264,25 @@ def list_notes(index, limit: int = 20) -> str:
         return "\n".join(lines)
     for note_id, title, body, collection, created_at in rows:
         preview = " ".join(body.split())[:160]
-        collection_label = collection or "unassigned"
         lines.append(f"[{note_id}] {title}")
-        lines.append(f"Collection: {collection_label}")
+        lines.append(f"Collection: {collection or 'unassigned'}")
         lines.append(f"Preview: {preview}")
         lines.append("")
     return "\n".join(lines).rstrip()
 
 
 def search_notes(index, query: str, limit: int = 10) -> str:
-    """Search local notes and return a human-readable report.
+    """Simple substring/count note search, independent of the ranked index.
 
-    This remains a simple substring/count scan over the ``notes`` table
-    directly, independent of ``knowledge/ranker.search()``. It exists for
-    quick, dependency-free note lookups (e.g. a future ``/notes`` command)
-    and is not used by the main conversation pipeline, which searches
-    notes through the fully-ranked path instead (see ``_index_note()``).
+    Kept for quick, dependency-free note lookups; not used by the main
+    conversation pipeline, which searches notes through the fully-ranked
+    path instead (see _index_note()).
     """
     init_vault_schema(index)
     terms = tokenize(query)
     if not terms:
         return "No searchable terms were provided."
+
     rows = index.conn.execute(
         """
         SELECT notes.id, notes.title, notes.body, collections.name
@@ -328,6 +291,7 @@ def search_notes(index, query: str, limit: int = 10) -> str:
         ORDER BY notes.updated_at DESC
         """
     ).fetchall()
+
     scored: List[Tuple[int, Tuple[int, str, str, Optional[str]]]] = []
     for row in rows:
         note_id, title, body, collection = row
@@ -335,11 +299,14 @@ def search_notes(index, query: str, limit: int = 10) -> str:
         score = sum(blob.count(term) for term in terms)
         if score > 0:
             scored.append((score, row))
+
     scored.sort(key=lambda item: item[0], reverse=True)
+
     lines = ["Note Search", "", f"Query: {query}", ""]
     if not scored:
         lines.append("No matching notes found.")
         return "\n".join(lines)
+
     for score, row in scored[:limit]:
         note_id, title, body, collection = row
         preview = " ".join(body.split())[:220]
@@ -351,26 +318,19 @@ def search_notes(index, query: str, limit: int = 10) -> str:
     return "\n".join(lines).rstrip()
 
 
-def search_notes_as_documents(
-    index,
-    query: str,
-    limit: int = 10,
-) -> List[Dict[str, object]]:
-    """Return matching notes as document dicts, via simple substring scoring.
+def search_notes_as_documents(index, query: str, limit: int = 10) -> List[Dict[str, object]]:
+    """Legacy substring-scored note search returning document dicts.
 
-    Legacy path: this predates note-mirroring (see ``_index_note()``) and
-    is kept only for direct/CLI callers that want a lightweight,
-    dependency-free note search without touching the main ranked index.
-    The main conversation pipeline (``core/conversation.py``) no longer
-    uses this -- notes are now indexed as ``source_type="note"`` rows and
-    searched through ``knowledge/ranker.search()`` instead, which gives
-    them the same TF-IDF, coverage, title-match, phrase-match, and
-    intent-aware treatment as files and web pages.
+    Predates note-mirroring; the main conversation pipeline no longer
+    uses this (notes are indexed as source_type="note" and searched
+    through knowledge/ranker.search() instead), kept for direct/CLI
+    callers wanting a lightweight path without touching the main index.
     """
     init_vault_schema(index)
     terms = tokenize(query)
     if not terms:
         return []
+
     rows = index.conn.execute(
         """
         SELECT notes.id, notes.title, notes.body, collections.name
@@ -379,6 +339,7 @@ def search_notes_as_documents(
         ORDER BY notes.updated_at DESC
         """
     ).fetchall()
+
     documents: List[Dict[str, object]] = []
     for note_id, title, body, _collection in rows:
         blob = f"{title} {body}".lower()
@@ -406,28 +367,11 @@ def search_notes_as_documents(
 
 
 def extract_entities_from_text(text: str, limit: int = 30) -> List[str]:
-    """Extract lightweight named entities.
-
-    This is not machine learning. It is intentionally simple:
-    - finds capitalized phrases
-    - removes obvious generic phrases
-    - returns stable sorted names
-    """
+    """Extract lightweight capitalized-phrase entities. Not machine learning."""
     blocked = {
-        "The",
-        "This",
-        "That",
-        "Local",
-        "Internet",
-        "Optional",
-        "Current",
-        "Source",
-        "Sources",
-        "Answer",
-        "Confidence",
-        "Observation",
-        "Suggested",
-        "BrisartAI Status",
+        "The", "This", "That", "Local", "Internet", "Optional", "Current",
+        "Source", "Sources", "Answer", "Confidence", "Observation",
+        "Suggested", "BrisartAI Status",
     }
     found = []
     for match in ENTITY_RE.finditer(text):
@@ -441,6 +385,7 @@ def extract_entities_from_text(text: str, limit: int = 30) -> List[str]:
             continue
         if any(char.isupper() for char in value):
             found.append(value)
+
     seen = set()
     out = []
     for item in found:
@@ -452,19 +397,15 @@ def extract_entities_from_text(text: str, limit: int = 30) -> List[str]:
 
 
 def rebuild_entities(index, max_sources: int = 5000) -> str:
-    """Rebuild simple entity links from indexed sources."""
+    """Rebuild entity links from indexed sources. Always safe to re-run."""
     init_vault_schema(index)
     rows = index.conn.execute(
-        """
-        SELECT id, title, text
-        FROM sources
-        ORDER BY indexed_at DESC
-        LIMIT ?
-        """,
+        "SELECT id, title, text FROM sources ORDER BY indexed_at DESC LIMIT ?",
         (max_sources,),
     ).fetchall()
-    entity_count = 0
+
     link_count = 0
+
     with index.conn:
         index.conn.execute("DELETE FROM source_entities")
         for source_id, title, text in rows:
@@ -472,52 +413,33 @@ def rebuild_entities(index, max_sources: int = 5000) -> str:
             entities = extract_entities_from_text(blob)
             for entity in entities:
                 index.conn.execute(
-                    """
-                    INSERT OR IGNORE INTO entities(name, entity_type, created_at)
-                    VALUES(?,?,?)
-                    """,
+                    "INSERT OR IGNORE INTO entities(name, entity_type, created_at) VALUES(?,?,?)",
                     (entity, "concept", now_ts()),
                 )
                 entity_id = index.conn.execute(
-                    "SELECT id FROM entities WHERE name=?",
-                    (entity,),
+                    "SELECT id FROM entities WHERE name=?", (entity,)
                 ).fetchone()[0]
                 index.conn.execute(
-                    """
-                    INSERT OR REPLACE INTO source_entities(
-                        source_id,
-                        entity_id,
-                        weight
-                    )
-                    VALUES(?,?,?)
-                    """,
+                    "INSERT OR REPLACE INTO source_entities(source_id, entity_id, weight) VALUES(?,?,?)",
                     (source_id, entity_id, 1),
                 )
-                entity_count += 1
                 link_count += 1
-    return (
-        "Entity index rebuilt.\n"
-        f"Sources reviewed: {len(rows)}\n"
-        f"Entity mentions linked: {link_count}"
-    )
+
+    return f"Entity index rebuilt.\nSources reviewed: {len(rows)}\nEntity mentions linked: {link_count}"
 
 
 def vault_report(index, top_entities: int = 25) -> str:
-    """Return a high-level vault report."""
+    """High-level vault report: counts, collections, top entities."""
     init_vault_schema(index)
     total_sources = index.source_count()
     local_files = index.source_count("file")
     web_pages = index.source_count("web")
     note_sources = index.source_count("note")
-    collection_count = index.conn.execute(
-        "SELECT COUNT(*) FROM collections"
-    ).fetchone()[0]
-    note_count = index.conn.execute(
-        "SELECT COUNT(*) FROM notes"
-    ).fetchone()[0]
-    entity_count = index.conn.execute(
-        "SELECT COUNT(*) FROM entities"
-    ).fetchone()[0]
+
+    collection_count = index.conn.execute("SELECT COUNT(*) FROM collections").fetchone()[0]
+    note_count = index.conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+    entity_count = index.conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+
     entity_rows = index.conn.execute(
         """
         SELECT entities.name, COUNT(source_entities.source_id) AS hits
@@ -529,16 +451,17 @@ def vault_report(index, top_entities: int = 25) -> str:
         """,
         (top_entities,),
     ).fetchall()
+
     collection_rows = index.conn.execute(
         """
         SELECT collections.name, COUNT(source_collections.source_id) AS hits
         FROM collections
-        LEFT JOIN source_collections
-            ON source_collections.collection_id = collections.id
+        LEFT JOIN source_collections ON source_collections.collection_id = collections.id
         GROUP BY collections.id
         ORDER BY hits DESC, collections.name ASC
         """
     ).fetchall()
+
     lines = []
     lines.append("BrisartAI Knowledge Vault")
     lines.append("")
@@ -552,12 +475,14 @@ def vault_report(index, top_entities: int = 25) -> str:
     lines.append(f"Notes: {note_count}")
     lines.append(f"Known entities: {entity_count}")
     lines.append("")
+
     if collection_rows:
         lines.append("Collections")
         lines.append("-----------")
         for name, hits in collection_rows:
             lines.append(f"- {name}: {hits} source(s)")
         lines.append("")
+
     if entity_rows:
         lines.append("Top Entities")
         lines.append("------------")
@@ -571,12 +496,11 @@ def vault_report(index, top_entities: int = 25) -> str:
         lines.append("Run:")
         lines.append("vault rebuild")
         lines.append("")
+
     lines.append("Interpretation")
     lines.append("--------------")
     if total_sources == 0:
-        lines.append(
-            "The vault is ready, but no files or web pages have been indexed yet."
-        )
+        lines.append("The vault is ready, but no files or web pages have been indexed yet.")
     else:
         lines.append(
             "The vault has indexed material available. Collections, notes, "
@@ -584,29 +508,30 @@ def vault_report(index, top_entities: int = 25) -> str:
         )
     lines.append("")
     lines.append("Suggested next move: create a collection, add notes, or run vault rebuild.")
+
     return "\n".join(lines)
 
 
 def timeline(index, query: str, limit: int = 30) -> str:
-    """Build a simple timeline around a term or concept."""
+    """Simple chronological timeline of indexed sources matching a term."""
     init_vault_schema(index)
     terms = tokenize(query)
     if not terms:
         return "No searchable timeline term was provided."
+
     rows = index.conn.execute(
-        """
-        SELECT id, source_type, title, location, text, indexed_at
-        FROM sources
-        ORDER BY indexed_at ASC
-        """
+        "SELECT id, source_type, title, location, text, indexed_at FROM sources ORDER BY indexed_at ASC"
     ).fetchall()
+
     matches = []
     for source_id, source_type, title, location, text, indexed_at in rows:
         blob = f"{title or ''} {location or ''} {text or ''}".lower()
         score = sum(blob.count(term) for term in terms)
         if score > 0:
             matches.append((indexed_at, score, source_id, source_type, title, location))
+
     matches.sort(key=lambda item: (item[0], -item[1]))
+
     lines = []
     lines.append("Timeline")
     lines.append("--------")
@@ -615,6 +540,7 @@ def timeline(index, query: str, limit: int = 30) -> str:
     if not matches:
         lines.append("No matching indexed sources found.")
         return "\n".join(lines)
+
     for indexed_at, score, source_id, source_type, title, location in matches[:limit]:
         label = title or location
         lines.append(f"- Indexed at: {indexed_at}")
@@ -622,8 +548,10 @@ def timeline(index, query: str, limit: int = 30) -> str:
         lines.append(f"  Match score: {score}")
         lines.append(f"  Location: {location}")
         lines.append("")
+
     if len(matches) > limit:
         lines.append(f"... {len(matches) - limit} additional matching sources not shown.")
+
     return "\n".join(lines).rstrip()
 
 

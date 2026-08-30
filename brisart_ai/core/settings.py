@@ -1,25 +1,23 @@
-"""Persistent research settings for BrisartAI.
+"""brisart_ai/core/settings.py
 
-This gives BrisartAI a small set of user-facing toggles so behavior can
-be changed from the Settings dialog without editing code.
+Persistent research toggles (`data/research_settings.json`) so choices
+survive a restart. Three toggles: `auto_web_research` (search the web
+when local evidence comes up empty), `search_local_files` (include
+imported files in local search), `search_notes` (include saved notes).
+`core/conversation.py` reads all three every time it answers a
+question; `ui/dialogs.py`'s `SettingsDialog` renders one checkbox per
+toggle straight from `TOGGLE_LABELS`.
 
-Two toggles change real routing behavior, both wired through
-``core/conversation.py``:
-  * ``auto_web_research`` -- whether the public web is searched when no
-    local evidence is found.
-  * ``search_local_files`` -- when off, local search is restricted to
-    previously indexed web pages only; imported files are excluded.
-  * ``search_notes`` -- when on, saved vault notes are merged into the
-    local evidence pool alongside files and web pages.
+A fourth "Research Collections" toggle used to live here and was
+removed -- collections are just tags with no "active collection" concept
+anywhere in the UI, so the checkbox did nothing. Re-add it only once a
+collection-scoped search actually exists.
 
-A "Research Collections" toggle previously existed here but was
-removed: collections are just tags on top of already-indexed sources,
-and there is no "active collection" concept anywhere in the UI for a
-toggle to meaningfully restrict. Re-add it once a collection-scoped
-search UX actually exists, instead of shipping a checkbox that does
-nothing.
-
-Pure Python. No dependencies.
+`load()` creates the file with defaults if missing, and swallows a
+corrupt/unreadable file rather than raising -- a broken settings file
+can only ever fall back to defaults, never crash startup. Only known
+boolean keys are accepted on load, so a stale key from an older build
+(like the removed collections toggle) is silently ignored.
 """
 from __future__ import annotations
 
@@ -41,7 +39,8 @@ TOGGLE_LABELS = {
     "auto_web_research": "Automatic Web Research",
 }
 
-# Accepted short keys for toggling a setting by name.
+# Accepted short keys for toggling a setting by name (for any future
+# text-command surface).
 SETTING_ALIASES = {
     "web": "auto_web_research",
     "auto-web": "auto_web_research",
@@ -56,10 +55,7 @@ SETTING_ALIASES = {
 
 
 class ResearchSettings:
-    """Loads, saves, and applies BrisartAI research toggles.
-
-    Backed by a small JSON file so settings persist across restarts.
-    """
+    """Loads, saves, and applies BrisartAI research toggles."""
 
     def __init__(self, path: Path = DEFAULT_SETTINGS_PATH):
         self.path = Path(path)
@@ -68,7 +64,6 @@ class ResearchSettings:
         self.load()
 
     def load(self) -> None:
-        """Load settings from disk, creating defaults if missing."""
         if not self.path.exists():
             self.save()
             return
@@ -81,42 +76,38 @@ class ResearchSettings:
                 self.values[key] = data[key]
 
     def save(self) -> None:
-        """Persist current settings to disk."""
         self.path.write_text(
             json.dumps(self.values, indent=2, sort_keys=True),
             encoding="utf-8",
         )
 
     def get(self, key: str) -> bool:
-        """Return the current value of a setting."""
         return bool(self.values.get(key, False))
 
     def set(self, key: str, value: bool) -> None:
-        """Set and persist a setting value."""
         if key not in DEFAULT_SETTINGS:
             raise KeyError(f"Unknown setting: {key}")
         self.values[key] = bool(value)
         self.save()
 
     def toggle(self, key: str) -> bool:
-        """Flip a setting and persist the new value. Returns new value."""
+        """Flip a setting and persist it. Returns the new value."""
         new_value = not self.get(key)
         self.set(key, new_value)
         return new_value
 
     def resolve_key(self, raw_key: str) -> str:
-        """Resolve a user-typed key (e.g. 'web') to its canonical name."""
+        """Resolve a short typed key (e.g. 'web') to its canonical name."""
         cleaned = str(raw_key or "").strip().lower()
         resolved = SETTING_ALIASES.get(cleaned)
         if not resolved:
             raise KeyError(
-                f"Unknown setting '{raw_key}'. "
-                "Try: web, local, notes"
+                f"Unknown setting '{raw_key}'. Try: web, local, notes"
             )
         return resolved
 
     def render(self) -> str:
-        """Return a human-readable settings panel."""
+        """Human-readable settings panel."""
         lines = ["Research Sources", ""]
         for key, label in TOGGLE_LABELS.items():
             mark = "x" if self.get(key) else " "

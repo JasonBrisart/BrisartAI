@@ -1,11 +1,24 @@
-"""Sidebar with the core actions plus a live status readout."""
+"""brisart_ai/ui/sidebar.py
+
+The left-hand nav: app name/version header, the five core action
+buttons (Import Files, Add Note, Research Web, Settings, Help), and a
+status line pinned to the bottom showing indexed source counts.
+ui/app.py builds one `Sidebar(master, actions)` with a dict mapping
+each button's key to its handler, and calls `set_status(total, files,
+web)` after every answer/import/note action to keep the counts fresh --
+this widget only displays numbers it's handed, it doesn't count
+anything itself.
+
+Fixed width (`theme.SIDEBAR_WIDTH`) via `pack_propagate(False)`, so it
+never resizes to fit button label length.
+"""
 from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
 
-from brisart_ai import APP_NAME, __version__
 from brisart_ai.ui import theme
+from brisart_ai.version_info import APP_NAME, __version__
 
 
 class Sidebar(ttk.Frame):
@@ -69,6 +82,8 @@ class Sidebar(ttk.Frame):
         status.pack(side="bottom", anchor="w", padx=theme.PAD, pady=theme.PAD)
 
     def _make_button(self, label: str, key: str, small: bool = False) -> None:
+        # key is bound as a default arg (k=key) so every button invokes
+        # its OWN action, not whichever key the for-loop last landed on.
         btn = tk.Button(
             self,
             text=label,

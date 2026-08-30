@@ -1,4 +1,17 @@
-"""Small modal dialogs used by the BrisartAI desktop UI."""
+"""brisart_ai/ui/dialogs.py
+
+The small modal prompts ui/app.py's sidebar actions need: a file/folder
+picker (`ask_import_path`, folder first, falls back to a single file if
+cancelled), a generic text prompt (`ask_text`), a two-step title/body
+prompt for notes (`ask_note`, short-circuits to `("", "")` if either
+step is cancelled or the body ends up empty), and `SettingsDialog`, a
+checkbox per toggle in core/settings.py's `TOGGLE_LABELS`.
+
+`SettingsDialog` reads/writes straight against the live
+`BrisartService.settings` instance and calls `on_change()` after every
+toggle so the sidebar's status line refreshes immediately -- there's no
+separate "Apply" step.
+"""
 from __future__ import annotations
 
 import tkinter as tk
@@ -20,12 +33,7 @@ def ask_text(master, title: str, prompt: str) -> str:
 
 
 def ask_note(master) -> tuple:
-    """Prompt for a note title and body.
-
-    Returns a ``(title, body)`` tuple. Returns ``("", "")`` if the user
-    cancels either prompt or leaves the body empty, so callers can treat
-    an empty body as "nothing to save" without extra checks.
-    """
+    """Prompt for a note title, then a body. Returns ("", "") on cancel."""
     title = simpledialog.askstring("Add Note", "Note title:", parent=master)
     if not title:
         return "", ""

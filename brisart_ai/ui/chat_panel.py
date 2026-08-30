@@ -1,4 +1,17 @@
-"""Chat transcript panel for the BrisartAI desktop UI."""
+"""brisart_ai/ui/chat_panel.py
+
+The scrollable transcript plus single-line input box that makes up the
+center of the BrisartAI window. `ChatPanel(master, on_submit)` calls
+`on_submit(text)` with the stripped input whenever the user hits Enter
+or clicks Send; `ui/app.py` wires that into `_on_chat_submit`. The three
+`append_user`/`append_assistant`/`append_system` helpers just apply a
+different color tag from ui/theme.py so the transcript visually
+separates who said what.
+
+The transcript itself is read-only (`state="disabled"` outside of
+`append()`) so the user can select/copy text but not edit history, and
+it auto-scrolls to the bottom after every message.
+"""
 from __future__ import annotations
 
 import tkinter as tk
