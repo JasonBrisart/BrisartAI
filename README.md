@@ -476,24 +476,6 @@ The generic, markup-agnostic extractor used for these three providers has not be
 - Updated `scripts/debug_search_replay.py` to display each result's
   title and phrase-match status alongside its full score breakdown.
 
-### 1.0.0-beta.4
-- Added shared intent-aware ranking for web and offline retrieval
-- Added founder, inventor, statistic, explanation, and general intent classes
-- Added `brisart_ai/intent.py`
-- Added offline ranking replay fixtures
-- Added intent reasoning to the web replay tool
-- Fixed underscore-separated Wikipedia article scoring
-- Fixed percent-encoded URL handling during intent scoring
-- Preserved the provider-batch sanity guard from beta.3
-- Improved measured relevance for founder, inventor, and statistics queries
-
-### 1.0.0-beta.3
-- Moved web research onto a background thread
-- Fixed desktop freezing during long web research operations
-- Fixed the Automatic Web Research setting for typed questions
-- Surfaced search and crawler diagnostics in the desktop transcript
-- Added distinct status messages for web and offline retrieval
-
 For the complete release history, see `docs/CHANGELOG.md`.
 
 ---
