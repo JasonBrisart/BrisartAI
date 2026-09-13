@@ -1,10 +1,13 @@
-"""Question-intent detection and intent-aware scoring for BrisartAI.
+"""
+File: brisart_ai/intent.py
 
-Why this exists
----------------
-Term-overlap ranking answers "does this source mention the query words?"
-It cannot answer "does this source mention them for the right reason?",
-so it produced results that were topically adjacent but useless:
+Purpose
+-------
+Question-intent detection and intent-aware scoring for BrisartAI.
+Term-overlap ranking answers "does this source mention the query
+words?" It cannot answer "does this source mention them for the right
+reason?", so it produced results that were topically adjacent but
+useless:
 
     who invented microsoft?           -> Invention, Microsoft PowerPoint,
                                          Outlook.com
@@ -21,38 +24,90 @@ product page is the wrong genre no matter how many query words it
 contains.
 
 So a query is classified into a coarse intent, and each intent carries
-two vocabularies:
-
-  * BOOST terms   -- words whose presence suggests the right genre
-                     ("founded", "co-founder", "history", "bell labs")
-  * PENALTY terms -- words marking a predictably wrong genre for this
-                     intent ("powerpoint", "download", "sign in",
-                     "album", "breeds")
-
-The result is deterministic, explainable, and dependency-free: scoring a
-candidate returns the exact terms that fired, so
-``scripts/debug_search_replay.py`` and
-``scripts/debug_offline_replay.py`` can print *why* a source ranked
+two vocabularies: BOOST terms (words whose presence suggests the right
+genre -- "founded", "co-founder", "history", "bell labs") and PENALTY
+terms (words marking a predictably wrong genre for this intent --
+"powerpoint", "download", "sign in", "album", "breeds"). The result is
+deterministic, explainable, and dependency-free: scoring a candidate
+returns the exact terms that fired, so scripts/debug_search_replay.py
+and scripts/debug_offline_replay.py can print *why* a source ranked
 where it did.
 
-Design constraints
--------------------
-* Pure standard library. No embeddings, no models, no network.
-* Intent is a HINT, not a filter. Nothing is ever dropped for having the
-  wrong intent -- scores are nudged, so a strong term-overlap match still
-  wins when no genre signal is present. This keeps the failure mode
-  "slightly wrong order" instead of "correct answer deleted".
-* One vocabulary, two consumers. ``web/crawler.py`` scores URLs (short,
-  no prose) and ``knowledge/ranker.py`` scores indexed documents (title
-  plus body text). They share this module's detection and constants so
-  the two paths cannot drift apart, which is exactly how the duplicated
-  dictionary blocklists rotted before being consolidated.
+Design constraints: pure standard library, no embeddings/models/network;
+intent is a HINT, not a filter (nothing is ever dropped for having the
+wrong intent -- scores are nudged, so the failure mode is "slightly
+wrong order," never "correct answer deleted"); one vocabulary, two
+consumers (web/crawler.py scores URLs, knowledge/ranker.py scores
+indexed documents, and both share this module's detection and constants
+so the two paths cannot drift apart, which is exactly how the
+duplicated dictionary blocklists rotted before being consolidated).
 
-Deliberate non-goals
----------------------
-This does not attempt correct ranking in general, and it is not a
-relevance framework. It removes a specific class of obviously-wrong
-result. Anything subtler is left to term overlap.
+Deliberate non-goal: this is not a general relevance framework. It
+removes a specific class of obviously-wrong result; anything subtler is
+left to term overlap.
+
+Communication / relationships
+------------------------------
+- brisart_ai/knowledge/ranker.py: imports detect_intent(),
+  is_bare_generic_concept_title(), name_candidates(), score_intent()
+  for offline document ranking's intent adjustment pass.
+- brisart_ai/web/crawler.py: imports describe_intent(), detect_intent(),
+  score_intent() for URL-scoring's intent adjustment.
+- brisart_ai/knowledge/synthesizer.py: imports INTENT_COMPARISON/
+  INTENT_EXPLANATION/INTENT_STATISTIC/detect_intent() to decide which
+  answer-sentence signal (quantity/comparison/reason) to boost.
+- scripts/debug_offline_replay.py and scripts/debug_search_replay.py:
+  import describe_intent()/detect_intent() to print the classification
+  driving a replay.
+- Imports nothing from elsewhere in brisart_ai; only re, urllib.parse,
+  typing.
+
+Settings / parameters
+----------------------
+- ALL_INTENTS: founder, inventor, statistic, explanation, comparison,
+  general.
+- _KNOWN_COMPANIES: a small, explicit, hand-maintained set of company
+  names that route a creation question to the founder intent rather
+  than the inventor default -- guessing "is this token a company?" from
+  surface form is unreliable, and a wrong guess sends the query to the
+  wrong intent, so unknown entities safely fall through to inventor
+  instead.
+- INTENT_BOOSTS / INTENT_PENALTIES: per-intent vocabulary, matched as
+  whole tokens (single words) or phrases (multi-word/hyphenated entries,
+  matched as substrings of the space-normalized haystack).
+- BOOST_WEIGHTS / PENALTY_WEIGHTS: per-signal weights for the strong
+  signals (SIGNAL_PERSON, SIGNAL_YEAR, SIGNAL_WORK, SIGNAL_GENERIC).
+  Penalties outweigh boosts on purpose: a wrong-genre marker (e.g. a
+  "(album)" qualifier) is far more reliable evidence than a right-genre
+  one (e.g. "history" appearing somewhere is only suggestive).
+- score_intent(max_boosts=4): ordinary vocabulary credit is capped at 4
+  distinct terms so a page stuffed with genre words cannot dominate on
+  vocabulary alone; the strong signals are not subject to that cap,
+  since each identifies a page's genre outright.
+
+Edge cases
+----------
+- is_generic_concept_page() vs. is_bare_generic_concept_title(): the
+  former is for a single already-isolated candidate embedded in a larger
+  haystack-matching context (used inside score_intent()); the latter is
+  the stricter, ranker-facing variant that additionally strips common
+  " - Site Name" title suffixes before checking (used directly by
+  knowledge/ranker.py's generic_concept_title_adjust(), which must apply
+  even for INTENT_GENERAL queries that never call score_intent() at
+  all).
+- looks_like_person_name() is a narrow shape test (2-3 capitalized
+  words, optional middle initial, no digits, no organizational/genre
+  words) -- it recognizes a name shape; it does not know who anyone is,
+  and no list of people is embedded.
+- name_candidates() offers a URL's last path segment as an extra
+  candidate (in addition to the raw text) so an encyclopedia/biography
+  URL's subject can be recognized as a name even though the full URL's
+  scheme/host/path prefix would otherwise push it past the 2-3 word
+  limit.
+- _intent_text()-style percent-decoding is handled by callers (see
+  web/crawler.py), not here -- this module operates on whatever text it
+  is given and assumes the caller has already decoded a URL if genre
+  qualifiers like "(album)" need to be visible.
 """
 from __future__ import annotations
 
@@ -155,7 +210,6 @@ _STATISTIC_PHRASES: Tuple[Tuple[str, ...], ...] = (
     ("total", "of"),
     ("population", "of"),
 )
-
 _STATISTIC_WORDS: FrozenSet[str] = frozenset(
     {"population", "estimate", "estimated", "statistics", "census"}
 )
@@ -174,7 +228,6 @@ _EXPLANATION_PHRASES: Tuple[Tuple[str, ...], ...] = (
     ("why", "is"),
     ("why", "are"),
 )
-
 _EXPLANATION_LEAD_WORDS: FrozenSet[str] = frozenset({"why", "explain"})
 
 # "when was X invented" asks for a date, so date vocabulary is boosted.
@@ -212,7 +265,7 @@ def _words(text: str) -> List[str]:
 
 
 def _has_phrase(words: Sequence[str], phrase: Sequence[str]) -> bool:
-    """True when ``phrase`` appears as consecutive tokens in ``words``."""
+    """True when `phrase` appears as consecutive tokens in `words`."""
     span = len(phrase)
     if span == 0 or len(words) < span:
         return False
@@ -306,7 +359,6 @@ DATE_BOOSTS: Tuple[str, ...] = (
     "timeline", "chronology", "history", "year", "date", "dates",
     "century", "anniversary",
 )
-
 _YEAR_RE = re.compile(r"\b(1[5-9]\d{2}|20[0-2]\d)\b")
 
 # Wikipedia-style disambiguation qualifiers that identify a *creative
@@ -356,7 +408,6 @@ _NON_NAME_TOKENS: FrozenSet[str] = frozenset(
         "institute", "labs", "laboratories", "museum", "school",
     }
 )
-
 _NAME_PART_RE = re.compile(r"^[A-Z][a-z]{1,}$")
 _NAME_INITIAL_RE = re.compile(r"^[A-Z]\.?$")
 
@@ -391,7 +442,7 @@ _GENERIC_CONCEPT_TITLES: FrozenSet[str] = frozenset(
 def is_generic_concept_page(text: str, topic_terms: Set[str]) -> bool:
     """True for an encyclopedia page about a bare concept, not the topic.
 
-    ``/wiki/Invention`` for "who invented the transistor" is the case
+    `/wiki/Invention` for "who invented the transistor" is the case
     this exists for: the title is one abstract noun drawn from the
     question's verb, carrying none of the question's actual subject.
 
@@ -401,10 +452,10 @@ def is_generic_concept_page(text: str, topic_terms: Set[str]) -> bool:
 
     Note: this function is intended for a single, already-isolated
     candidate string (a title or a URL), not a large combined haystack
-    of title+location+body text -- see
-    :func:`is_bare_generic_concept_title` for a stricter, ranker-facing
-    variant that additionally strips common " - Site Name" title
-    suffixes before checking, which this function does not do.
+    of title+location+body text -- see :func:`is_bare_generic_concept_title`
+    for a stricter, ranker-facing variant that additionally strips common
+    " - Site Name" title suffixes before checking, which this function
+    does not do.
     """
     for candidate in name_candidates(text):
         title = re.sub(r"_", " ", str(candidate or "")).strip()
@@ -430,21 +481,21 @@ def is_generic_concept_page(text: str, topic_terms: Set[str]) -> bool:
 
 
 def is_bare_generic_concept_title(candidate: str) -> bool:
-    """True when ``candidate`` is a bare generic-concept title/slug.
+    """True when `candidate` is a bare generic-concept title/slug.
 
     Unlike :func:`is_generic_concept_page`, this takes a single,
     already-isolated candidate string -- typically a document's display
-    title (e.g. ``"Law - Wikipedia"``) or a URL-derived slug (e.g. the
-    ``"Law"`` extracted from ``.../wiki/Law``) -- rather than a large
+    title (e.g. `"Law - Wikipedia"`) or a URL-derived slug (e.g. the
+    `"Law"` extracted from `.../wiki/Law`) -- rather than a large
     combined haystack of title, location, and body text. This makes its
     behavior precise and independent of whether a URL happens to be
     embedded somewhere inside a larger string.
 
     Common trailing " - Site Name" / " | Site Name" suffixes are
-    stripped before comparison, so both ``"Law"`` and ``"Law -
-    Wikipedia"`` correctly match. Only a genuinely bare, single-word
-    title matches; ``"History of the Transistor"`` or ``"Law of South
-    Africa"`` do not, since they carry more than just the concept word.
+    stripped before comparison, so both `"Law"` and `"Law -
+    Wikipedia"` correctly match. Only a genuinely bare, single-word
+    title matches; `"History of the Transistor"` or `"Law of South
+    Africa"` do not, since they carry more than just the concept word.
 
     >>> is_bare_generic_concept_title("Law")
     True
@@ -471,7 +522,7 @@ def is_bare_generic_concept_title(candidate: str) -> bool:
 
 
 def looks_like_person_name(text: str) -> bool:
-    """True when ``text`` looks like a personal name, e.g. "Bill Gates".
+    """True when `text` looks like a personal name, e.g. "Bill Gates".
 
     A "who invented/founded X" question is answered in large part by
     pages about *people*, but a person's page carries no genre vocabulary
@@ -525,7 +576,7 @@ def wants_person(query: str) -> bool:
 
 
 def name_candidates(text: str) -> List[str]:
-    """Fragments of ``text`` that might be a person's name.
+    """Fragments of `text` that might be a person's name.
 
     :func:`looks_like_person_name` needs capitalization and a short token
     run, but a candidate arrives either as a bare title ("Bill Gates") or
@@ -537,9 +588,9 @@ def name_candidates(text: str) -> List[str]:
     which is where encyclopedia and biography URLs put the subject.
 
     Note: callers should pass a single title or URL, not a large
-    combined haystack of title+location+body text -- when ``text``
-    contains a URL embedded partway through a longer string, the ``//``/
-    multi-``/`` detection below treats the *entire* string as a path and
+    combined haystack of title+location+body text -- when `text`
+    contains a URL embedded partway through a longer string, the `//`/
+    multi-`/` detection below treats the *entire* string as a path and
     produces a meaningless "last segment". This is fine for the two
     documented callers (:func:`looks_like_person_name` checks and
     :func:`is_generic_concept_page`, which are only ever fed a title or
@@ -584,13 +635,17 @@ def detect_intent(query: str) -> str:
     if not words:
         return INTENT_GENERAL
     word_set = set(words)
+
     if any(_has_phrase(words, phrase) for phrase in _STATISTIC_PHRASES):
         return INTENT_STATISTIC
     if word_set & _STATISTIC_WORDS:
         return INTENT_STATISTIC
+
     if _COMPARISON_QUERY_RE.search(str(query or "")):
         return INTENT_COMPARISON
+
     has_creation = bool(word_set & _CREATION_VERBS)
+
     # An explanation question ("how does a transistor work") outranks the
     # creation reading, but "who invented X" must stay a creation
     # question even though it starts with a question word.
@@ -601,6 +656,7 @@ def detect_intent(query: str) -> str:
             return INTENT_EXPLANATION
         if words[0] in _EXPLANATION_LEAD_WORDS:
             return INTENT_EXPLANATION
+
     if has_creation:
         # A product name means the question is about a product's history,
         # not about who founded the company that ships it.
@@ -609,6 +665,7 @@ def detect_intent(query: str) -> str:
         if word_set & _KNOWN_COMPANIES:
             return INTENT_FOUNDER
         return INTENT_INVENTOR
+
     return INTENT_GENERAL
 
 
@@ -681,14 +738,14 @@ def score_intent(
     max_boosts: int = 4,
     topic_terms: Set[str] | None = None,
 ) -> Tuple[float, List[str], List[str]]:
-    """Score ``text`` for how well it fits ``intent``.
+    """Score `text` for how well it fits `intent`.
 
-    Returns ``(delta, boosts_hit, penalties_hit)`` where ``delta`` is a
+    Returns `(delta, boosts_hit, penalties_hit)` where `delta` is a
     signed adjustment to add to a base relevance score. Returning the
     matched terms is what makes ranking explainable in the replay
     scripts.
 
-    Ordinary vocabulary credit is capped at ``max_boosts`` distinct terms
+    Ordinary vocabulary credit is capped at `max_boosts` distinct terms
     so a page stuffed with genre words cannot dominate on vocabulary
     alone. The strong signals (person, year, work-of-art, generic
     concept) are weighted separately and are not subject to that cap,
@@ -707,14 +764,18 @@ def score_intent(
     haystack, tokens = _normalize_haystack(text)
     if not haystack:
         return (0.0, [], [])
+
     vocabulary_hits = _match_vocabulary(
         haystack, tokens, boost_terms(intent, query)
     )
     penalties = _match_vocabulary(haystack, tokens, penalty_terms(intent))
+
     strong_boosts: List[str] = []
+
     # A year is concrete evidence for a "when was it invented" question.
     if query and wants_date(query) and _YEAR_RE.search(haystack):
         strong_boosts.append(SIGNAL_YEAR)
+
     # A person's page answers a "who" question despite carrying no genre
     # vocabulary. Only the raw text can show this, since the check needs
     # capitalization that the normalized haystack has discarded.
@@ -728,13 +789,16 @@ def score_intent(
         )
     ):
         strong_boosts.append(SIGNAL_PERSON)
+
     # A creative work sharing the query's wording is not an answer.
     if _WORK_QUALIFIER_RE.search(str(text or "")):
         penalties = penalties + [SIGNAL_WORK]
+
     # A bare concept page borrows the question's verb without its
     # subject; demote it so an entity-specific page wins.
     if topic_terms is not None and is_generic_concept_page(text, topic_terms):
         penalties = penalties + [SIGNAL_GENERIC]
+
     counted = vocabulary_hits[: max(0, max_boosts)]
     boost_total = sum(
         BOOST_WEIGHTS.get(term, 1.0) for term in counted
@@ -742,6 +806,7 @@ def score_intent(
     penalty_total = sum(
         PENALTY_WEIGHTS.get(term, 1.0) for term in penalties
     )
+
     delta = (boost_total * boost_weight) - (penalty_total * penalty_weight)
     return (delta, counted + strong_boosts, penalties)
 

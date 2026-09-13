@@ -1,16 +1,36 @@
-"""brisart_ai/ui/chat_panel.py
+"""
+File: brisart_ai/ui/chat_panel.py
 
+Purpose
+-------
 The scrollable transcript plus single-line input box that makes up the
-center of the BrisartAI window. `ChatPanel(master, on_submit)` calls
-`on_submit(text)` with the stripped input whenever the user hits Enter
-or clicks Send; `ui/app.py` wires that into `_on_chat_submit`. The three
-`append_user`/`append_assistant`/`append_system` helpers just apply a
-different color tag from ui/theme.py so the transcript visually
-separates who said what.
+center of the BrisartAI window. Calls on_submit(text) with the stripped
+input whenever the user hits Enter or clicks Send.
 
-The transcript itself is read-only (`state="disabled"` outside of
-`append()`) so the user can select/copy text but not edit history, and
-it auto-scrolls to the bottom after every message.
+Communication / relationships
+------------------------------
+- brisart_ai/ui/app.py: constructs ChatPanel(body, on_submit=self.
+  _on_chat_submit) and calls .append_user()/.append_assistant()/
+  .append_system() to render the conversation.
+- Imports brisart_ai.ui.theme for every color/font constant used.
+
+Settings / parameters
+----------------------
+- on_submit: callback invoked with the stripped, non-empty input text on
+  Enter or Send-button click.
+- append(text, tag): the shared rendering primitive; append_user()/
+  append_assistant()/append_system() are thin wrappers selecting the
+  "user"/"assistant"/"system" tag so each role renders in its own color
+  from theme.py.
+
+Edge cases
+----------
+- The transcript is read-only (state="disabled" outside of append())
+  so the user can select/copy text but not edit history.
+- _submit() ignores an empty/whitespace-only input rather than calling
+  on_submit() with nothing.
+- append() auto-scrolls to the bottom after every message and inserts a
+  blank line separator before all but the very first message.
 """
 from __future__ import annotations
 
@@ -43,6 +63,7 @@ class ChatPanel(ttk.Frame):
             state="disabled",
         )
         self.transcript.pack(side="top", fill="both", expand=True)
+
         self.transcript.tag_configure(
             "user", foreground=theme.FG_USER, font=theme.FONT_MONO_BOLD
         )

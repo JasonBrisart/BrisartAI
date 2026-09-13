@@ -1,23 +1,51 @@
-"""brisart_ai/core/settings.py
+"""
+File: brisart_ai/core/settings.py
 
-Persistent research toggles (`data/research_settings.json`) so choices
-survive a restart. Three toggles: `auto_web_research` (search the web
-when local evidence comes up empty), `search_local_files` (include
-imported files in local search), `search_notes` (include saved notes).
-`core/conversation.py` reads all three every time it answers a
-question; `ui/dialogs.py`'s `SettingsDialog` renders one checkbox per
-toggle straight from `TOGGLE_LABELS`.
+Purpose
+-------
+Persistent research toggles, backed by data/research_settings.json, so
+the user's choices survive an app restart. Three toggles:
+auto_web_research (search the web when local evidence comes up empty),
+search_local_files (include imported files in local search), and
+search_notes (include saved notes).
 
-A fourth "Research Collections" toggle used to live here and was
-removed -- collections are just tags with no "active collection" concept
-anywhere in the UI, so the checkbox did nothing. Re-add it only once a
-collection-scoped search actually exists.
+Communication / relationships
+------------------------------
+- brisart_ai/core/conversation.py: reads all three toggles via .get()
+  every time build_conversation_answer() answers a question.
+- brisart_ai/ui/dialogs.py: SettingsDialog renders one checkbox per
+  toggle straight from TOGGLE_LABELS and calls .set()/.toggle() on
+  ResearchSettings when the user clicks one.
+- brisart_ai/ui/service.py: constructs and owns the single
+  ResearchSettings instance for the app's lifetime.
+- Imports nothing from elsewhere in brisart_ai; only json/pathlib/typing.
 
-`load()` creates the file with defaults if missing, and swallows a
-corrupt/unreadable file rather than raising -- a broken settings file
-can only ever fall back to defaults, never crash startup. Only known
-boolean keys are accepted on load, so a stale key from an older build
-(like the removed collections toggle) is silently ignored.
+Settings / parameters
+----------------------
+- DEFAULT_SETTINGS_PATH: data/research_settings.json, relative to the
+  process working directory.
+- DEFAULT_SETTINGS: {"search_local_files": True, "search_notes": True,
+  "auto_web_research": False} -- files and notes are searched locally by
+  default; automatic web research is opt-in.
+- TOGGLE_LABELS: the human-readable label shown per toggle in the
+  Settings dialog and in render()'s text panel.
+- SETTING_ALIASES: short typed keys ("web", "local", "notes") mapped to
+  their canonical setting name, for any future text-command surface;
+  resolve_key() raises KeyError with a helpful hint for an unknown key.
+
+Edge cases
+----------
+- load() creates the settings file with defaults if it does not exist,
+  and swallows a corrupt/unreadable file rather than raising -- a broken
+  settings file can only ever fall back to defaults, never crash
+  startup.
+- Only known boolean keys are accepted on load(); a stale key from an
+  older build (e.g. the removed "search_collections" toggle) is
+  silently ignored rather than raising or being re-persisted.
+- A fourth "Research Collections" toggle used to exist here and was
+  removed -- collections are just tags with no "active collection"
+  concept anywhere in the UI, so the checkbox did nothing. Re-add only
+  once a collection-scoped search actually exists.
 """
 from __future__ import annotations
 

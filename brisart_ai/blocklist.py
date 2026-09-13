@@ -1,18 +1,65 @@
-"""Web-source blocking policy for BrisartAI -- the single source of truth.
+"""
+File: brisart_ai/blocklist.py
 
-Every module that needs to decide "should this web page be kept?" imports
-from here, so the policy lives in exactly ONE file. To add or remove a
-blocked site, edit BLOCKED_WEB_HOSTS below and every consumer updates
-automatically.
+Purpose
+-------
+Web-source blocking policy for BrisartAI -- the single source of truth
+for "should this web page be kept?" Every module that needs to decide
+this imports from here, so the policy lives in exactly ONE file. To add
+or remove a blocked site, edit BLOCKED_WEB_HOSTS and every consumer
+updates automatically.
 
-Consumers:
-  * web/search.py   -- drops blocked hosts from search results
-  * web/crawler.py  -- refuses blocked hosts + off-topic wikis at ingest
-  * knowledge/index.py -- purges any such rows already in the database
+This lives at the top level (next to util.py) rather than inside web/
+so that knowledge/index.py can import it without the knowledge layer
+having to depend on the web layer.
 
-This lives at the top level (next to util.py) rather than inside web/ so
-that knowledge/index.py can import it without the knowledge layer having
-to depend on the web layer.
+Communication / relationships
+------------------------------
+- brisart_ai/web/search.py: drops blocked hosts from search results;
+  imports FUNCTION_WORDS for the shared meaningful-term check used to
+  judge whether a result is on-topic.
+- brisart_ai/web/crawler.py: refuses blocked hosts + off-topic wikis at
+  ingest time via is_junk_web_source(); imports ACCOUNT_HOST_PREFIXES,
+  FUNCTION_WORDS, LISTING_PATH_MARKERS, and LOW_VALUE_HOSTS for URL
+  scoring.
+- brisart_ai/knowledge/index.py: purges any blocked/off-topic rows
+  already in the database via purge_junk_web_sources().
+- Imports nothing from elsewhere in brisart_ai; only re/urllib.parse.
+
+Settings / parameters
+----------------------
+- BLOCKED_WEB_HOSTS: dictionary/thesaurus/definition sites. Pages from
+  these hosts are almost never the answer to a factual research
+  question (asking "how many cats are in america" should not return the
+  definition of the word "many").
+- LOW_VALUE_HOSTS: hosts that are rarely the answer to a factual
+  research question but which search-result scraping surfaces
+  constantly (video/social platforms, vendor help desks, shopping/
+  adoption listings). NOT blocked outright -- only ranked down by
+  web/crawler.py's score_result(), since e.g. a YouTube page can
+  legitimately be the subject of a query.
+- LISTING_PATH_MARKERS: path fragments marking a listing/search/category
+  page rather than a page of prose that answers something; matched as
+  case-insensitive substrings.
+- ACCOUNT_HOST_PREFIXES: product/account landing-page host prefixes
+  (myaccount., login., etc.) -- a brand's own sign-in portal matches the
+  brand term but never answers a question about the brand.
+- FUNCTION_WORDS: bare English function/question words, used two ways:
+  (1) stripped out of a query before it is sent to a search engine, and
+  (2) to detect a Wikipedia page ABOUT one of these words (e.g.
+  /wiki/Many is the disambiguation page for "many" -- never the answer
+  to a question about cats).
+
+Edge cases
+----------
+- is_blocked_web_host() requires an absolute URL with a scheme
+  ("https://thefreedictionary.com/x"). A bare hostname
+  ("thefreedictionary.com") has no scheme, so urlsplit() exposes no
+  hostname and this returns False -- both callers pass normalized
+  absolute URLs, so this is a documented constraint, not a bug.
+- is_offtopic_wiki() only rejects a Wikipedia page whose title is
+  EXACTLY a bare function word, and only when that word is not itself
+  part of the topic being searched for (topic_terms override).
 """
 from __future__ import annotations
 
@@ -120,7 +167,7 @@ _WIKI_TITLE_RE = re.compile(r"/wiki/([^/#?]+)")
 def is_blocked_web_host(location: str) -> bool:
     """Return True when a URL/location points at a blocked dictionary host.
 
-    ``location`` must be an absolute URL with a scheme
+    `location` must be an absolute URL with a scheme
     ("https://thefreedictionary.com/x"). A bare hostname
     ("thefreedictionary.com") has no scheme, so urlsplit() exposes no
     hostname and this returns False. Both callers pass normalized

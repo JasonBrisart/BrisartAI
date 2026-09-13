@@ -1,33 +1,52 @@
-"""brisart_ai/core/conversation.py
+"""
+File: brisart_ai/core/conversation.py
 
+Purpose
+-------
 The single answer-routing entry point: given a question, decide what to
-search and how to turn it into an answer. Flow:
+search and how to turn it into an answer. Cleans the input, runs a
+local ranked search scoped by which source types the user's settings
+allow, optionally triggers exactly one web search (forced or as a
+fallback when local search is empty and Automatic Web Research is on),
+and hands surviving evidence to synthesis.
 
-1. Clean accidental shell/quote syntax from the typed question.
-2. Search indexed local data (files/web/notes), scoped by which source
-   types the user's settings toggles allow.
-3. If a fresh web search was explicitly requested (`force_web=True`,
-   what the "Research Web" button sends), or local search came up empty
-   AND Automatic Web Research is on, crawl the public web and re-check.
-4. If any evidence exists -- local or freshly fetched -- synthesize a
-   sourced answer. If nothing exists at all, say so plainly instead of
-   guessing.
+Communication / relationships
+------------------------------
+- brisart_ai/ui/service.py: BrisartService.ask() is the only caller of
+  build_conversation_answer().
+- Calls brisart_ai.io.input_cleaner.normalize_shellish_input(),
+  brisart_ai.knowledge.ranker.search(),
+  brisart_ai.knowledge.synthesizer.synthesize(), and
+  brisart_ai.web.crawler.web_search_and_ingest().
+- Reads brisart_ai.core.settings.ResearchSettings via the settings
+  parameter, and reads/writes brisart_ai.core.session_memory.
+  SessionMemory via the memory parameter.
 
-`ui/service.py`'s `BrisartService.ask()` is the only caller. The
-`allowed_source_types` set always includes `"web"` (previously-indexed
-pages stay searchable regardless of the Local Files toggle), and adds
-`"file"`/`"note"` based on settings -- notes are mirrored into the main
-index by `knowledge/vault.py`'s `add_note()`, so they get the exact same
-TF-IDF/coverage/title/phrase/intent-aware ranking as files and web pages
-rather than a separate cruder substring scan.
+Settings / parameters
+----------------------
+- allowed_source_types: always includes "web" (previously-indexed pages
+  stay searchable regardless of the Local Files toggle), and adds
+  "file"/"note" based on settings.search_local_files/search_notes --
+  notes are mirrored into the main index by knowledge/vault.py's
+  add_note(), so they get the exact same TF-IDF/coverage/title/phrase/
+  intent-aware ranking as files and web pages rather than a separate
+  cruder substring scan.
+- force_web: when True (the explicit "Research Web" action), always
+  triggers a fresh web search regardless of local results; when omitted/
+  False, a web search runs only as a fallback when local search returns
+  nothing AND settings.auto_web_research is on.
 
-A web search is triggered exactly once per question -- never a forced
-search stacked on top of a redundant fallback search. When it runs and
-finds something, the answer gets a one-line "searched the web" notice;
-when it runs and finds nothing usable, a distinct message explains that
-(different cause than "nothing indexed yet" -- attempt made and failed,
-vs. no attempt made). Both the question and the answer are always
-recorded to session memory, even on the "nothing found" path.
+Edge cases
+----------
+- A web search is triggered exactly once per question -- never a forced
+  search stacked on top of a redundant fallback search.
+- When a web search runs and finds something, the answer gets a
+  one-line "searched the web" notice; when it runs and finds nothing
+  usable, a distinct message explains that (different cause than
+  "nothing indexed yet" -- an attempt was made and failed, vs. no
+  attempt was made at all).
+- Both the question and the answer are always recorded to session
+  memory, even on the "nothing found" path.
 """
 from __future__ import annotations
 

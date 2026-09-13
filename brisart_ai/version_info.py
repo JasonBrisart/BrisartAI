@@ -61,7 +61,7 @@ Edge cases
   at import time -- every consumer of __version__ only ever displays
   it as text.
 - The project root is located relative to this file's own path
-  (parentsbrisart_ai/version_info.py -> brisart_ai/ -> project
+  (parents[1]: brisart_ai/version_info.py -> brisart_ai/ -> project
   root), the same anchoring technique already used in
   brisart_ai/knowledge/index.py for DEFAULT_DB, so this works
   regardless of the current working directory the app was launched

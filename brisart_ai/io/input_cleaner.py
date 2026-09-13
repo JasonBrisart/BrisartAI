@@ -1,15 +1,35 @@
-"""brisart_ai/io/input_cleaner.py
+"""
+File: brisart_ai/io/input_cleaner.py
 
-BrisartAI's chat box only ever receives questions, never commands, so
-this just trims whitespace and unwraps one pair of matching quotes
-around a pasted question. Used by core/conversation.py before every
-search and by core/session_memory.py before storing a topic. Only a
-single layer of quotes is stripped on purpose -- a question that is
-itself about quoted text shouldn't get mangled.
+Purpose
+-------
+Normalizes a typed chat question before it reaches search: trims
+whitespace and unwraps one pair of matching quotes around a pasted
+question. The chat box only ever receives questions, never commands, so
+this deliberately does no shell-syntax or typo correction.
 
-(The old shell-command-unwrapping/typo-correction logic that used to
-live here is gone; it could silently rewrite a real one-word question,
-like "stats", into a command that no longer exists.)
+Communication / relationships
+------------------------------
+- brisart_ai/core/conversation.py: calls normalize_shellish_input()
+  before every search in build_conversation_answer().
+- brisart_ai/core/session_memory.py: calls normalize_shellish_input()
+  before compressing and storing a topic.
+- Imports nothing from elsewhere in brisart_ai; pure string logic.
+
+Settings / parameters
+----------------------
+- None. The function takes no configuration; behavior is fixed.
+
+Edge cases
+----------
+- Only a single layer of quotes is stripped on purpose -- a question
+  that is itself about quoted text (e.g. `say "hi"`) is not mangled,
+  because the inner quotes are not adjacent to the string boundaries.
+- An all-whitespace input returns "" rather than raising.
+- The older shell-command-unwrapping/typo-correction logic that used to
+  live here is gone; it could silently rewrite a real one-word question
+  like "stats" into a command that no longer exists in this GUI-only
+  build.
 """
 from __future__ import annotations
 

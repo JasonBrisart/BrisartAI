@@ -1,21 +1,53 @@
 #!/usr/bin/env python3
-"""Replay the real BrisartAI search path and show why results survived.
+"""
+File: scripts/debug_search_replay.py
 
-This is a diagnostic harness, not a test suite. It exercises the genuine
-provider stack (no mocks) so retrieval-quality regressions are visible:
-which query forms were sent, which provider answered, which batches were
-rejected wholesale as unrelated, and how the survivors ranked -- now
-including each result's own title and whether a literal phrase match
-fired, per the 1.0.0-beta.8 title/phrase-aware ranking change in
-``web/crawler.py``.
+Purpose
+-------
+Replays the real BrisartAI web search path against live providers and
+shows why results survived: which query forms were sent, which
+provider answered, which batches were rejected wholesale as unrelated,
+and how the survivors ranked -- including each result's own title and
+whether a literal phrase match fired, per the 1.0.0-beta.8 title/
+phrase-aware ranking change in web/crawler.py. This is a diagnostic
+harness, not a test suite; it exercises the genuine provider stack with
+no mocks so retrieval-quality regressions are visible.
 
-Live providers rate-limit aggressively. Runs are spaced by --delay
-seconds by default; lower it only for a single-query run.
+Communication / relationships
+------------------------------
+- Imports brisart_ai.intent.{describe_intent, detect_intent},
+  brisart_ai.util.normalize_url, brisart_ai.web.crawler.{_should_reject,
+  _topic_terms, clean_search_query, explain_ranking, rank_results,
+  search_keyword_fallback}, brisart_ai.web.search.search_public_web.
+- Standalone script, not imported by any other module; run directly via
+  `python3 scripts/debug_search_replay.py`.
 
-Usage:
-    python3 scripts/debug_search_replay.py
-    python3 scripts/debug_search_replay.py --query "why do cats purr"
-    python3 scripts/debug_search_replay.py --limit 8 --delay 60
+Settings / parameters
+----------------------
+- REGRESSION_QUERIES: the default set of 10 queries replayed when
+  --query is not supplied, spanning founder/inventor/statistic/
+  explanation intents.
+- --query (repeatable): replay one or more specific queries instead of
+  the default regression set.
+- --limit (default 5): results requested per query.
+- --delay (default 45 seconds): pause between queries -- live providers
+  rate-limit aggressively, so runs are spaced out by default; lower it
+  only for a single-query run.
+
+Edge cases
+----------
+- Diagnostic stdout from search_public_web() is captured via
+  contextlib.redirect_stdout and filtered down to the lines worth
+  showing (provider trying/returned/WARN lines, rejected-batch notices)
+  rather than dumping the full raw log.
+- A KeyboardInterrupt during the loop returns exit code 130 rather than
+  propagating a traceback, so an impatient manual run can be cancelled
+  cleanly.
+- The per-URL scoring detail table intentionally shows base score,
+  intent delta, terms matched, and phrase-matched status separately --
+  a ranking that cannot be inspected cannot be trusted, and this project
+  has previously shipped one confidently wrong diagnosis that a fuller
+  breakdown would have caught sooner.
 """
 from __future__ import annotations
 
@@ -64,6 +96,7 @@ def _run_one(query: str, limit: int) -> bool:
     """Replay a single query. Returns True when usable results survived."""
     print(RULE)
     print(f"ORIGINAL QUERY : {query!r}")
+
     natural = clean_search_query(query)
     keyword = search_keyword_fallback(query)
     print(f"NATURAL FORM   : {natural!r}")
@@ -71,8 +104,10 @@ def _run_one(query: str, limit: int) -> bool:
         print(f"KEYWORD FORM   : {keyword!r}")
     else:
         print("KEYWORD FORM   : (same as natural; not searched twice)")
+
     topics = _topic_terms(natural) | _topic_terms(keyword)
     print(f"TOPIC TERMS    : {sorted(topics)}")
+
     intent = detect_intent(query)
     print(f"DETECTED INTENT: {describe_intent(intent, query)}")
 
@@ -80,10 +115,12 @@ def _run_one(query: str, limit: int) -> bool:
     for label, form in (("natural", natural), ("keyword", keyword)):
         if label == "keyword" and (not keyword or keyword == natural):
             continue
+
         print(f"\n--- provider trace ({label} form: {form!r}) ---")
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
             found = search_public_web(form, limit=limit, with_titles=True)
+
         for line in buffer.getvalue().splitlines():
             text = line.strip()
             if not text:
@@ -92,6 +129,7 @@ def _run_one(query: str, limit: int) -> bool:
                 print(f"  REJECTED BATCH: {text}")
             elif "trying" in text or "returned" in text or "WARN" in text:
                 print(f"  {text}")
+
         print(f"  raw result count: {len(found)}")
         collected.extend(found)
 
@@ -122,6 +160,7 @@ def _run_one(query: str, limit: int) -> bool:
     for url, title in kept_pairs:
         title_note = f"  (title: {title!r})" if title else ""
         print(f"  + {url}{title_note}")
+
     if dropped_pairs:
         print(f"REJECTED URLS  : {len(dropped_pairs)} (off-topic/definition filter)")
         for url, _title in dropped_pairs:
@@ -161,6 +200,7 @@ def _run_one(query: str, limit: int) -> bool:
         if not reason:
             reason.append("term overlap only")
         print(f"         reason: {'; '.join(reason)}")
+
     return bool(final)
 
 
@@ -183,6 +223,7 @@ def main() -> int:
     args = parser.parse_args()
 
     queries = tuple(args.query) if args.query else REGRESSION_QUERIES
+
     usable = 0
     for position, query in enumerate(queries):
         if position:
@@ -193,6 +234,7 @@ def main() -> int:
         except KeyboardInterrupt:
             print("\ninterrupted")
             return 130
+
     print(RULE)
     print(f"SUMMARY: {usable}/{len(queries)} queries returned usable results")
     return 0

@@ -1,16 +1,39 @@
-"""brisart_ai/ui/dialogs.py
+"""
+File: brisart_ai/ui/dialogs.py
 
+Purpose
+-------
 The small modal prompts ui/app.py's sidebar actions need: a file/folder
-picker (`ask_import_path`, folder first, falls back to a single file if
-cancelled), a generic text prompt (`ask_text`), a two-step title/body
-prompt for notes (`ask_note`, short-circuits to `("", "")` if either
-step is cancelled or the body ends up empty), and `SettingsDialog`, a
-checkbox per toggle in core/settings.py's `TOGGLE_LABELS`.
+picker, a generic text prompt, a two-step title/body prompt for notes,
+and SettingsDialog, a checkbox per toggle in core/settings.py's
+TOGGLE_LABELS.
 
-`SettingsDialog` reads/writes straight against the live
-`BrisartService.settings` instance and calls `on_change()` after every
-toggle so the sidebar's status line refreshes immediately -- there's no
-separate "Apply" step.
+Communication / relationships
+------------------------------
+- brisart_ai/ui/app.py: calls ask_import_path(), ask_text(), ask_note(),
+  and constructs SettingsDialog(self, self.service, on_change=...).
+- brisart_ai/core/settings.py: SettingsDialog reads TOGGLE_LABELS to
+  render one checkbox per toggle and reads/writes directly against the
+  live BrisartService.settings instance.
+- Imports brisart_ai.ui.theme for SettingsDialog's colors/fonts.
+
+Settings / parameters
+----------------------
+- ask_import_path(): folder picker first, falls back to a single-file
+  picker if the folder picker is cancelled.
+- ask_note(): two sequential prompts (title, then body); short-circuits
+  to ("", "") if either step is cancelled or the body ends up empty.
+- SettingsDialog(master, service, on_change=None): on_change is called
+  after every toggle so the caller (the sidebar's status line) can
+  refresh immediately -- there is no separate "Apply" step.
+
+Edge cases
+----------
+- ask_text()/ask_note() return "" (not None) on cancel, so callers can
+  use a plain `if not result:` check without a None check.
+- SettingsDialog._toggle() writes directly to
+  self.service.settings.set(key, ...), so a toggle is persisted to disk
+  immediately, not just held in the dialog's own state.
 """
 from __future__ import annotations
 

@@ -1,31 +1,49 @@
-"""brisart_ai/knowledge/index.py
+"""
+File: brisart_ai/knowledge/index.py
 
+Purpose
+-------
 The SQLite-backed store every indexed file, web page, and note lands
-in. Two tables: `sources` (type, location, title, full text, content
-hash, size, extension, timestamp) and `terms` (flat term-frequency rows
-keyed by `(term, source_id)`, read directly by knowledge/ranker.py for
-TF-IDF scoring). Three writers call `add_source()`: knowledge/ingest.py,
-web/crawler.py, and knowledge/vault.py's note mirroring.
+in. Two tables: sources (type, location, title, full text, content
+hash, size, extension, timestamp) and terms (flat term-frequency rows
+keyed by (term, source_id), read directly by knowledge/ranker.py for
+TF-IDF scoring).
 
-The database is anchored to the project root (`parents[2]` from this
-file: knowledge/index.py -> brisart_ai/ -> project root) so it always
-lands at `<project root>/brisart_ai_index.sqlite3` regardless of the
-working directory the app was launched from. `check_same_thread=False`
-because background web-research threads share this connection with the
-main-thread UI, serialized at the app level via `BrisartApp._busy`.
+Communication / relationships
+------------------------------
+- Three writers call add_source(): brisart_ai/knowledge/ingest.py,
+  brisart_ai/web/crawler.py, and brisart_ai/knowledge/vault.py's note
+  mirroring.
+- brisart_ai/knowledge/ranker.py: reads terms/sources directly via SQL
+  for scoring.
+- brisart_ai/ui/service.py: calls purge_blocked_web_sources() once at
+  startup.
+- Imports brisart_ai.blocklist.is_junk_web_source() and
+  brisart_ai.util.{now_ts, stable_hash, tokenize}.
 
-`add_source()` **upserts by a stable key** (hash of `source_type +
-location`) -- re-adding the same file or re-crawling the same URL always
-fully replaces both the sources row and every term row for it, so
-nothing stale from a previous version of that source lingers. It raises
-`ValueError` for a missing type/location (unrecoverable metadata) but
-just returns `False` for empty text (an ordinary, expected outcome
-during bulk ingestion, not an error).
+Settings / parameters
+----------------------
+- DEFAULT_DB: anchored to the project root (parents[2] from this file:
+  knowledge/index.py -> brisart_ai/ -> project root) so it always lands
+  at <project root>/brisart_ai_index.sqlite3 regardless of the working
+  directory the app was launched from.
+- check_same_thread=False: background web-research threads share this
+  connection with the main-thread UI, serialized at the app level via
+  BrisartApp._busy.
+- add_source()'s source_key is a stable hash of source_type + location,
+  so re-adding the same file or re-crawling the same URL always fully
+  replaces both the sources row and every term row for it -- nothing
+  stale from a previous version of that source lingers.
 
-`purge_junk_web_sources()` sweeps stale dictionary/definition pages out
-of the index using the shared blocklist policy, and only ever touches
-`source_type = 'web'` rows -- local files and notes are never subject to
-that policy.
+Edge cases
+----------
+- add_source() raises ValueError for a missing type/location
+  (unrecoverable metadata) but just returns False for empty text (an
+  ordinary, expected outcome during bulk ingestion, not an error).
+- purge_junk_web_sources() sweeps stale dictionary/definition pages out
+  of the index using the shared blocklist policy, and only ever touches
+  source_type = 'web' rows -- local files and notes are never subject to
+  that policy.
 """
 from __future__ import annotations
 
@@ -72,9 +90,7 @@ class Index:
                 source_id INTEGER NOT NULL,
                 tf INTEGER NOT NULL,
                 PRIMARY KEY(term, source_id),
-                FOREIGN KEY(source_id)
-                    REFERENCES sources(id)
-                    ON DELETE CASCADE
+                FOREIGN KEY(source_id) REFERENCES sources(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_terms_term ON terms(term);
             CREATE INDEX IF NOT EXISTS idx_sources_type ON sources(source_type);
@@ -92,6 +108,7 @@ class Index:
             ).fetchall()
         except sqlite3.Error:
             return 0
+
         doomed = [
             int(source_id)
             for source_id, location in rows
@@ -99,6 +116,7 @@ class Index:
         ]
         if not doomed:
             return 0
+
         with self.conn:
             self.conn.executemany(
                 "DELETE FROM terms WHERE source_id = ?",
@@ -178,7 +196,6 @@ class Index:
             self.conn.execute(
                 "DELETE FROM terms WHERE source_id = ?", (source_id,)
             )
-
             counts = collections.Counter(
                 tokenize(cleaned_title + " " + cleaned_location + " " + cleaned_text)
             )

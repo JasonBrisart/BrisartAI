@@ -1,20 +1,47 @@
-"""brisart_ai/io/readers.py
+"""
+File: brisart_ai/io/readers.py
 
-File-type dispatch for local ingestion. `is_supported()` decides which
-files BrisartAI can read at all; `iter_supported_files()` walks a mix of
+Purpose
+-------
+File-type dispatch for local ingestion. is_supported() decides which
+files BrisartAI can read at all; iter_supported_files() walks a mix of
 individual paths and folders (recursively, de-duplicated by resolved
-path) to find them; `read_file()` extracts searchable text from any one
+path) to find them; read_file() extracts searchable text from any one
 supported file, delegating to io/binary_readers.py for
 .docx/.pptx/.xlsx/.odt/.pdf and io/extractor.py for .html/.csv, with a
 few lighter-weight formats (.json, .jsonl, .rtf, .tsv) handled inline
-below.
+here.
 
-`iter_supported_files()` silently skips anything it can't resolve or
-access (bad path, permission error mid-walk) rather than aborting the
-whole ingestion run. `.rtf` gets a deliberately crude regex stripper --
-not a real RTF parser, just enough to make prose searchable. `.json`/
-`.jsonl` are pretty-printed when parseable and returned as-is otherwise
-(never raises on invalid JSON).
+Communication / relationships
+------------------------------
+- brisart_ai/knowledge/ingest.py: calls iter_supported_files() and
+  read_file() for every local import run.
+- Calls brisart_ai.io.binary_readers.{read_docx,read_pptx,read_xlsx,
+  read_odt,read_pdf_best_effort}, brisart_ai.io.extractor.{html_to_text,
+  csv_to_text}, and brisart_ai.util.safe_read_text().
+
+Settings / parameters
+----------------------
+- TEXT_EXTENSIONS / BINARY_TEXT_EXTENSIONS / SUPPORTED_EXTENSIONS: the
+  full set of file extensions BrisartAI can ingest; SUPPORTED_EXTENSIONS
+  is their union and is what is_supported() actually checks against.
+- SUPPORTED_EXTENSIONLESS_NAMES: well-known extensionless filenames
+  ("dockerfile", "makefile", "license", "readme", "changelog"), matched
+  case-insensitively, so a repo's LICENSE or Dockerfile is still ingested
+  even without a file extension.
+
+Edge cases
+----------
+- iter_supported_files() silently skips anything it can't resolve or
+  access (a bad path, or a permission error mid-walk) rather than
+  aborting the whole ingestion run; a resolved-path set (`seen`)
+  prevents the same file being yielded twice when it's reachable via
+  more than one of the input paths.
+- .rtf gets a deliberately crude regex stripper (_rtf_to_text) -- not a
+  real RTF parser, just enough to make prose searchable.
+- .json/.jsonl are pretty-printed when parseable via _pretty_json() and
+  returned as-is (raw text) otherwise; this function never raises on
+  invalid JSON.
 """
 from __future__ import annotations
 
@@ -71,13 +98,16 @@ def iter_supported_files(paths: Iterable[str]) -> Iterator[Path]:
             path = path.resolve()
         except OSError:
             continue
+
         if path.is_file():
             if is_supported(path) and path not in seen:
                 seen.add(path)
                 yield path
             continue
+
         if not path.is_dir():
             continue
+
         try:
             for child in path.rglob("*"):
                 try:
@@ -111,6 +141,7 @@ def _rtf_to_text(raw: str) -> str:
 def read_file(path: Path) -> str:
     """Extract searchable text from one supported file."""
     ext = path.suffix.lower()
+
     if ext == ".docx":
         return read_docx(path)
     if ext == ".pptx":
@@ -142,4 +173,5 @@ def read_file(path: Path) -> str:
         return "\n".join(lines)
     if ext == ".rtf":
         return _rtf_to_text(raw)
+
     return raw

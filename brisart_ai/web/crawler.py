@@ -1,61 +1,102 @@
-"""brisart_ai/web/crawler.py
+"""
+File: brisart_ai/web/crawler.py
 
+Purpose
+-------
 The single chokepoint every web page must pass through to get indexed:
 normalize the query, rank the resulting URLs, filter out known-junk
 hosts and off-topic disambiguation pages, respect robots.txt, fetch and
 de-duplicate content, and add the survivors to the index.
 
-**Query phrasing.** A question keeps its natural phrasing when sent to
-search (`clean_search_query()`), because that phrasing is what matches
+Query phrasing: a question keeps its natural phrasing when sent to
+search (clean_search_query()), because that phrasing is what matches
 pages actually containing the answer -- stripping "how many cats are in
 america" down to bare keywords throws that signal away and returns
 pages merely *about* cats. A keyword-only form
-(`search_keyword_fallback()`) is kept as a secondary attempt for when
-the phrased query returns nothing usable. `web_search_and_ingest()`
-searches BOTH forms and merges results, because neither reliably wins
-alone -- a live A/B test showed the phrased form found the right
-technical pages where keywords returned help-desk pages, while keywords
-found real statistical sources where the phrased form returned
-encyclopedia trivia.
+(search_keyword_fallback()) is kept as a secondary attempt for when the
+phrased query returns nothing usable. web_search_and_ingest() searches
+BOTH forms and merges results, because neither reliably wins alone -- a
+live A/B test showed the phrased form found the right technical pages
+where keywords returned help-desk pages, while keywords found real
+statistical sources where the phrased form returned encyclopedia
+trivia.
 
-**Four layers of junk filtering**, in order: an off-topic Wikipedia page
-whose title is itself a bare function word (`brisart_ai.blocklist`);
+Four layers of junk filtering, in order: an off-topic Wikipedia page
+whose title is itself a bare function word (brisart_ai.blocklist);
 known dictionary/thesaurus hosts, refused at ingest time as a final
-safety net; and title-and-phrase-aware ranking (below), so even survivors
-are ordered by genuine relevance rather than provider order.
+safety net; and title-and-phrase-aware ranking (below), so even
+survivors are ordered by genuine relevance rather than provider order.
 
-**Scoring a result URL** (`score_result()`/`_score_detail()`) is a small,
-hand-tuned integer heuristic, not a learned model:
-  +3  per topic term in the path (strongest signal)
-  +2  per topic term in the hostname OR the result's own displayed title
-      (each term credited once, at its best-scoring placement -- summing
-      host+path let a brand name double-dip and outrank a real answer)
-  +2  path looks like an article slug, only when a topic term already
-      matched (an unrelated hyphenated slug isn't evidence on its own)
-  +4  the literal query phrase appears in the URL+title text (detection
-      delegated to knowledge/ranker.py's `phrase_match_adjust()`, so web
-      and offline ranking can't silently disagree about what counts)
-  -4  host is rarely an answer (video/social/help-desk/shopping)
-  -3  path looks like a search/listing/category page
-  -4  host is a brand's own sign-in/account portal
-  -2  no topic term matched anywhere
-  +2  per extra distinct topic term matched (coverage bonus)
-An intent adjustment from `brisart_ai.intent` is folded in on top when a
-query is supplied, at a weight (`INTENT_WEIGHT = 2`) tuned so genre
+Scoring a result URL (score_result()/_score_detail()) is a small,
+hand-tuned integer heuristic, not a learned model: +3 per topic term in
+the path (strongest signal); +2 per topic term in the hostname OR the
+result's own displayed title (each term credited once, at its best-
+scoring placement -- summing host+path let a brand name double-dip and
+outrank a real answer); +2 path looks like an article slug, only when a
+topic term already matched; +4 the literal query phrase appears in the
+URL+title text (detection delegated to knowledge/ranker.py's
+phrase_match_adjust(), so web and offline ranking can't silently
+disagree about what counts); -4 host is rarely an answer (video/social/
+help-desk/shopping); -3 path looks like a search/listing/category page;
+-4 host is a brand's own sign-in/account portal; -2 no topic term
+matched anywhere; +2 per extra distinct topic term matched (coverage
+bonus). An intent adjustment from brisart_ai.intent is folded in on top
+when a query is supplied, at a weight (INTENT_WEIGHT = 2) tuned so genre
 signal can reorder comparably-overlapping results but can't by itself
 lift a page matching nothing.
 
-One URL-decoding wrinkle worth knowing about: `_intent_text()`
+One URL-decoding wrinkle worth knowing about: _intent_text()
 percent-decodes a URL and converts underscores to spaces before intent
 scoring, specifically because a live replay once ranked
-`/wiki/Invented_%28album%29` at the top for "who invented the
-transistor" -- the `(album)` qualifier that should have demoted it was
-spelled `%28album%29`, so the work-of-art penalty never matched.
+/wiki/Invented_%28album%29 at the top for "who invented the transistor"
+-- the (album) qualifier that should have demoted it was spelled
+%28album%29, so the work-of-art penalty never matched.
 
-`crawl_urls_to_index()` treats the combined blocklist/off-topic check as
-a filter applied both before a URL is first queued AND again when
-dequeued, since a URL discovered as an outbound link mid-crawl hasn't
-been checked yet at the time it was queued.
+Communication / relationships
+------------------------------
+- brisart_ai/ui/service.py: BrisartService.research() and (via
+  core/conversation.py) build_conversation_answer() call
+  web_search_and_ingest() as the entry point for any web research.
+- scripts/debug_search_replay.py: imports _should_reject, _topic_terms,
+  clean_search_query, explain_ranking, rank_results,
+  search_keyword_fallback directly to build its diagnostic replay.
+- Imports brisart_ai.blocklist.{ACCOUNT_HOST_PREFIXES, FUNCTION_WORDS,
+  LISTING_PATH_MARKERS, LOW_VALUE_HOSTS, is_junk_web_source},
+  brisart_ai.intent.{INTENT_GENERAL, describe_intent, detect_intent,
+  score_intent}, brisart_ai.knowledge.ranker.phrase_match_adjust,
+  brisart_ai.util.{normalize_url, same_site, stable_hash},
+  brisart_ai.web.fetcher.fetch_url, brisart_ai.web.search.
+  search_public_web, brisart_ai.web.policy.RobotsCache, and
+  brisart_ai.web.stats.CrawlStats.
+
+Settings / parameters
+----------------------
+- DEFAULT_DELAY_SECONDS (1.0): politeness delay between fetches during
+  a depth-crawl.
+- INTENT_WEIGHT (2) / PHRASE_MATCH_BONUS (4): integer bonuses folded
+  into the URL heuristic score (see Purpose for the full breakdown).
+- _INTENT_HINTS: question-phrase-to-keyword mappings used by
+  search_keyword_fallback() ("how many" -> "number", "population of" ->
+  "population", etc.), so the keyword-only fallback still leans toward
+  the right KIND of answer.
+- crawl_urls_to_index(same_domain_only=True): depth>0 crawling only
+  follows links on the same site as the URL it was discovered on.
+
+Edge cases
+----------
+- _stem(): a crude suffix stripper (floored at 4 characters, 3 for
+  plain s/es) so query and URL word forms can meet -- "who invented the
+  transistor" should match a page about its "Invention".
+- The article-slug bonus checks both "-" and "_" in path segments
+  (Wikipedia uses "_", most CMS platforms use "-") -- checking only "-"
+  silently denied this bonus to every encyclopedia article.
+- crawl_urls_to_index() treats the combined blocklist/off-topic check
+  (_should_reject()) as a filter applied both before a URL is first
+  queued AND again when dequeued, since a URL discovered as an outbound
+  link mid-crawl hasn't been checked yet at the time it was queued.
+- content_exists() swallows any exception and returns False (treats the
+  content as new) rather than raising, so a transient DB hiccup never
+  blocks a crawl.
 """
 from __future__ import annotations
 
@@ -101,7 +142,6 @@ _INTENT_HINTS: Tuple[Tuple[Tuple[str, ...], str], ...] = (
 )
 
 _QUERY_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-']*")
-
 # URL tokenizer -- deliberately different from _QUERY_WORD: inside a URL
 # "-"/"_"/"." separate words, so "history-of-microsoft-1975" must
 # tokenize to {history, of, microsoft, 1975}. Reusing _QUERY_WORD here
@@ -329,6 +369,7 @@ def explain_ranking(
     intent = detect_intent(query) if query else INTENT_GENERAL
     rows: List[dict] = []
     seen: Set[str] = set()
+
     for position, url in enumerate(urls):
         key = normalize_url(url)
         if key in seen:
@@ -360,6 +401,7 @@ def explain_ranking(
                 "boosts": boosts, "penalties": penalties, "score": total,
             }
         )
+
     rows.sort(key=lambda row: (-row["score"], row["position"]))
     return rows
 
@@ -428,6 +470,7 @@ def crawl_urls_to_index(
         if _should_reject(current_url, topics):
             print(f"SKIP off-topic/definition result: {current_url}")
             continue
+
         if not robots.allowed(current_url):
             print(f"SKIP robots.txt: {current_url}")
             continue

@@ -1,51 +1,108 @@
-"""brisart_ai/knowledge/ranker.py
+"""
+File: brisart_ai/knowledge/ranker.py
 
+Purpose
+-------
 Retrieval and ranking over BrisartAI's local index -- pure-Python
 TF-IDF layered with five extra signals, because "matches the query's
 words" and "actually answers the query" are not the same thing.
 
-**The base score.** Query terms split into meaningful terms and
-stopwords. Stopwords (ultra-common function/question words like "how,"
-"many," "the") are kept -- so "how many cats" still works -- but
-weighted at 15% of an ordinary term, because a page merely dense in the
-word "many" is almost never the answer to a real question. Each term's
-contribution is also normalized by document length, BM25-style: a
-document longer than the corpus average has its term-frequency
-contribution scaled down, which stops a very long, broad article from
-winning purely because it's long enough to mention every query word in
-passing somewhere.
+The base score: query terms split into meaningful terms and stopwords.
+Stopwords (ultra-common function/question words like "how," "many,"
+"the") are kept -- so "how many cats" still works -- but weighted at 15%
+of an ordinary term, because a page merely dense in the word "many" is
+almost never the answer to a real question. Each term's contribution is
+also normalized by document length, BM25-style: a document longer than
+the corpus average has its term-frequency contribution scaled down,
+which stops a very long, broad article from winning purely because it's
+long enough to mention every query word in passing somewhere.
 
-**Coverage.** A document matching more of the DISTINCT meaningful query
+Coverage: a document matching more of the DISTINCT meaningful query
 terms gets multiplied up (floor 0.15x for zero matches, up to 1.0x for
 matching everything). This is what actually stops a page dense in one
 common word from beating a genuine multi-term match.
 
-**Title match.** A document whose own title contains meaningful query
-terms gets boosted, weighted by how rare that term is across the corpus
-(IDF) and specifically DAMPED for a fixed list of generic instructional
-verbs (`explain`, `describe`, `define`, ...) via `GENERIC_QUERY_VERBS` --
-IDF alone can't tell a genuinely rare, specific term from a generic word
-that merely happens to appear in only one document of a small or
-freshly-crawled index; both look equally "rare" to IDF alone.
+Title match: a document whose own title contains meaningful query terms
+gets boosted, weighted by how rare that term is across the corpus (IDF)
+and specifically DAMPED for a fixed list of generic instructional verbs
+(explain, describe, define, ...) via GENERIC_QUERY_VERBS -- IDF alone
+can't tell a genuinely rare, specific term from a generic word that
+merely happens to appear in only one document of a small or freshly-
+crawled index; both look equally "rare" to IDF alone.
 
-**Generic-concept-title penalty.** A document titled nothing but a bare
+Generic-concept-title penalty: a document titled nothing but a bare
 abstract concept word shared with the query (a page titled "Law" for a
 question about specific legislation) gets demoted, unconditionally --
 regardless of detected intent. This has to be a standalone check
-(`generic_concept_title_adjust()`) rather than relying solely on the
-equivalent guard inside `brisart_ai.intent.score_intent()`, because that
-function is never even called for `INTENT_GENERAL` queries.
+(generic_concept_title_adjust()) rather than relying solely on the
+equivalent guard inside brisart_ai.intent.score_intent(), because that
+function is never even called for INTENT_GENERAL queries.
 
-**Phrase match.** A document where the literal query text appears as a
+Phrase match: a document where the literal query text appears as a
 contiguous phrase (not just scattered words) gets a flat multiplier.
 
-**Intent.** Last, for non-general intents only, `brisart_ai.intent`
-supplies the "why does this document mention the query's words" signal
-none of the above can provide.
+Intent: last, for non-general intents only, brisart_ai.intent supplies
+the "why does this document mention the query's words" signal none of
+the above can provide.
 
 Every one of these stages returns the exact signal(s) that fired, so
 scripts/debug_offline_replay.py can show precisely why a document
 ranked where it did instead of an opaque final number.
+
+Communication / relationships
+------------------------------
+- brisart_ai/core/conversation.py: build_conversation_answer() calls
+  search() to gather local evidence.
+- brisart_ai/web/crawler.py: imports phrase_match_adjust() so web and
+  offline ranking share the exact same phrase-detection logic.
+- scripts/debug_offline_replay.py: calls search() directly against
+  fixture data and prints intent_boosts/intent_penalties per result.
+- Imports brisart_ai.intent.{INTENT_GENERAL, detect_intent,
+  is_bare_generic_concept_title, name_candidates, score_intent} and
+  brisart_ai.util.tokenize().
+
+Settings / parameters
+----------------------
+- STOPWORD_WEIGHT (0.15): stopword contribution as a fraction of an
+  ordinary term.
+- COVERAGE_FLOOR (0.15): minimum coverage multiplier for a document
+  matching zero distinct meaningful terms.
+- LENGTH_NORM_B (0.6): BM25-style length-normalization strength. 0
+  disables it (score depends only on raw term frequency); 1 fully
+  normalizes. 0.6 is a moderate middle: long documents are meaningfully
+  discounted, but one genuinely dense in on-topic terms (already winning
+  on coverage) isn't crushed outright.
+- INTENT_WEIGHT (0.30) / INTENT_MIN_FACTOR (0.40) / INTENT_MAX_FACTOR
+  (1.90): intent's weight is a fraction of a document's own base score
+  rather than a flat constant (a flat bonus would be decisive in a small
+  index and negligible in a large one), clamped so a document can lose
+  at most 60% or gain at most 90% for genre fit -- intent is a hint, not
+  a verdict.
+- INTENT_CANDIDATE_FACTOR (5) / INTENT_CANDIDATE_MIN (10): size of the
+  candidate pool that gets the relatively expensive title/phrase/intent
+  pass, as a multiple of the requested limit plus a floor -- scoring the
+  entire index on every query would mean reading every row.
+- TITLE_MATCH_WEIGHT (0.12) / TITLE_MATCH_MAX_FACTOR (1.42) /
+  GENERIC_TERM_DAMPING (0.2): title-match bonus strength/cap, and the
+  damping applied to GENERIC_QUERY_VERBS within it (a generic verb
+  contributes at most a fifth of what an equally-rare specific term
+  would).
+- GENERIC_CONCEPT_TITLE_PENALTY_FACTOR (0.35): flat multiplier for a
+  bare generic-concept title.
+- PHRASE_MATCH_FACTOR (1.35) / PHRASE_MATCH_MIN_WORDS (2): only applied
+  to genuinely multi-word queries, so a single meaningful word isn't
+  double-counted as a "phrase".
+
+Edge cases
+----------
+- search() accepts either source_type (a single exact match) or
+  source_types (any iterable of allowed types, searching their union) --
+  the latter is what core/conversation.py uses to combine the Local
+  Files and Research Notes toggles into one ranked query. If neither is
+  given, every source type is searched.
+- Document length is approximated as the sum of indexed term frequencies
+  for that source, not raw byte/char count, so it is directly comparable
+  to the tf/idf arithmetic used elsewhere in this module.
 """
 from __future__ import annotations
 
@@ -241,6 +298,7 @@ def phrase_match_adjust(query: str, haystack: str) -> Tuple[float, List[str]]:
     normalized_query = _normalize_for_phrase(query)
     if len(normalized_query.split()) < PHRASE_MATCH_MIN_WORDS:
         return (1.0, [])
+
     normalized_haystack = _normalize_for_phrase(haystack)
     if normalized_query and normalized_query in normalized_haystack:
         return (PHRASE_MATCH_FACTOR, [SIGNAL_PHRASE_MATCH])
@@ -432,7 +490,6 @@ def search(
 
         inverse_document_frequency = math.log((total_sources + 1) / (document_frequency + 1)) + 1.0
         term_idf[term] = inverse_document_frequency
-
         weight = _term_weight(term)
         is_meaningful = term not in STOPWORDS
 

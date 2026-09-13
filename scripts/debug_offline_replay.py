@@ -1,30 +1,45 @@
 #!/usr/bin/env python3
-"""Offline retrieval replay: rank imported-document chunks with no network.
+"""
+File: scripts/debug_offline_replay.py
 
-Why this exists
----------------
-``debug_search_replay.py`` covers public web search, which means every run
-depends on whatever DuckDuckGo and Bing feel like returning that minute.
-That made a real bug hard to see: providers under rate-limiting return
-well-formed HTML for an unrelated query, so "who invented the transistor"
-came back as airline booking pages. Ranking work cannot be evaluated on a
-moving target.
+Purpose
+-------
+Offline retrieval replay: ranks imported-document chunks with no
+network involved. scripts/debug_search_replay.py covers public web
+search, which means every run depends on whatever DuckDuckGo and Bing
+feel like returning that minute -- providers under rate-limiting return
+well-formed HTML for an unrelated query, so "who invented the
+transistor" came back as airline booking pages, making a real ranking
+bug hard to see. This script removes the network entirely: it builds a
+temporary SQLite index from in-file text fixtures, runs the real
+brisart_ai.knowledge.ranker.search(), and prints the intent, score and
+reason for every candidate.
 
-This script removes the network entirely. It builds a temporary SQLite
-index from in-file text fixtures, runs the real
-:func:`brisart_ai.knowledge.ranker.search`, and prints the intent, score
-and reason for every candidate. The fixtures are throwaway: the database
-goes in a temp directory and is deleted on exit. No production data is
-touched and nothing is written to the repository.
+Communication / relationships
+------------------------------
+- Imports brisart_ai.intent.{describe_intent, detect_intent},
+  brisart_ai.knowledge.index.Index, brisart_ai.knowledge.ranker.search.
+- Standalone script, not imported by any other module; run directly
+  via `python3 scripts/debug_offline_replay.py`.
 
-Usage::
+Settings / parameters
+----------------------
+- FIXTURES: each entry is (name, query, expected_top_title, chunks)
+  where chunks are (title, text) pairs standing in for imported
+  .txt/.md/.pdf content.
+- Usage: `python3 scripts/debug_offline_replay.py` (all fixtures),
+  `... microsoft` (one fixture by name), `... --list` (list fixture
+  names/queries without running them).
 
-    python3 scripts/debug_offline_replay.py            # all fixtures
-    python3 scripts/debug_offline_replay.py microsoft  # one fixture
-    python3 scripts/debug_offline_replay.py --list
-
-Exit status is non-zero when a fixture's expected top chunk does not win,
-so this doubles as a regression check for the intent ranking.
+Edge cases
+----------
+- The fixture database goes in a temp directory (tempfile.mkdtemp())
+  and is deleted on exit (shutil.rmtree(..., ignore_errors=True)) --
+  fixtures are throwaway; no production data is touched and nothing is
+  written to the repository.
+- Exit status is non-zero when a fixture's expected top chunk does not
+  win, so this doubles as a regression check for the intent ranking
+  when run in CI or by hand before a release.
 """
 from __future__ import annotations
 
@@ -185,6 +200,7 @@ def run_fixture(fixture: Fixture, limit: int = 5) -> bool:
                     extension="txt",
                     size_bytes=len(text),
                 )
+
             intent = detect_intent(query)
             print("=" * 74)
             print(f"fixture: {name}")
@@ -192,10 +208,12 @@ def run_fixture(fixture: Fixture, limit: int = 5) -> bool:
             print(f"intent:  {describe_intent(intent, query)}")
             print(f"chunks:  {len(chunks)}")
             print("-" * 74)
+
             results = search(index, query, limit=limit)
             if not results:
                 print("  (no results)")
                 return False
+
             for position, doc in enumerate(results, 1):
                 boosts = doc.get("intent_boosts") or []
                 penalties = doc.get("intent_penalties") or []
@@ -211,6 +229,7 @@ def run_fixture(fixture: Fixture, limit: int = 5) -> bool:
                 )
                 print(f"        source: {doc['location']}")
                 print(f"        reason: {'; '.join(reason)}")
+
             top = str(results[0]["title"])
             ok = top == expected_top
             print("-" * 74)
@@ -230,14 +249,17 @@ def main(argv: Sequence[str]) -> int:
         for name, query, _expected, _chunks in FIXTURES:
             print(f"{name:12} {query}")
         return 0
+
     selected = [f for f in FIXTURES if not args or f[0] in args]
     if not selected:
         print(f"no fixture matching {args}; use --list", file=sys.stderr)
         return 2
+
     results: Dict[str, bool] = {}
     for fixture in selected:
         results[fixture[0]] = run_fixture(fixture)
         print()
+
     passed = sum(1 for ok in results.values() if ok)
     print("=" * 74)
     print(f"offline fixtures: {passed}/{len(results)} passed")

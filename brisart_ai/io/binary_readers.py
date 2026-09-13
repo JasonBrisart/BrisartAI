@@ -1,28 +1,46 @@
-"""brisart_ai/io/binary_readers.py
+"""
+File: brisart_ai/io/binary_readers.py
 
+Purpose
+-------
 Pure-Python, best-effort text extraction for Word (.docx), PowerPoint
 (.pptx), Excel (.xlsx), OpenDocument Text (.odt), and PDF (.pdf) --
 stdlib only (zipfile, xml.etree, re, zlib), no third-party parsing
 libraries. The goal throughout is searchable text, not faithful visual
 rendering, so these are intentionally simple.
 
-The Office formats (.docx/.pptx/.xlsx/.odt) are zip containers holding
-XML parts; each reader just unzips the relevant parts (Word: all of
-word/*.xml; PowerPoint: slides AND notes slides, so speaker notes are
-searchable too; Excel: sharedStrings.xml plus every worksheet; ODT:
-content.xml) and pulls text nodes out with ElementTree.
+Communication / relationships
+------------------------------
+- brisart_ai/io/readers.py: read_file() dispatches to read_docx(),
+  read_pptx(), read_xlsx(), read_odt(), or read_pdf_best_effort() based
+  on file extension; this is the only caller.
+- Imports nothing from elsewhere in brisart_ai; only zipfile, zlib, re,
+  and xml.etree.ElementTree.
 
-PDF is the odd one out: `read_pdf_best_effort()` is a hand-rolled,
-non-rendering scraper that finds literal parenthesized text runs
-directly in the raw bytes, then separately zlib-decompresses any
-`stream...endstream` block it can (the common case for modern PDF
-content streams) and pulls parenthesized runs out of that too. It makes
-no attempt to reconstruct reading order or layout.
+Settings / parameters
+----------------------
+- read_pdf_best_effort(path, max_bytes=10_000_000): caps how much of a
+  PDF is scanned, so an unusually large PDF cannot stall ingestion.
+- _xml_text(): shared ElementTree text-node extractor used by all four
+  Office/ODT readers.
 
-Every function here returns an empty string on any failure (corrupt
-zip, malformed XML, undecompressable stream) rather than raising --
-callers already treat empty text as "nothing to index," so one bad file
-never blocks an import run.
+Edge cases
+----------
+- The Office formats (.docx/.pptx/.xlsx/.odt) are zip containers holding
+  XML parts; each reader just unzips the relevant parts (Word: all of
+  word/*.xml; PowerPoint: slides AND notes slides, so speaker notes are
+  searchable too; Excel: sharedStrings.xml plus every worksheet; ODT:
+  content.xml) and pulls text nodes out with ElementTree.
+- read_pdf_best_effort() is a hand-rolled, non-rendering scraper: it
+  finds literal parenthesized text runs directly in the raw bytes, then
+  separately zlib-decompresses any stream...endstream block it can (the
+  common case for modern PDF content streams) and pulls parenthesized
+  runs out of that too. It makes no attempt to reconstruct reading order
+  or layout, and a stream that fails to decompress is simply skipped.
+- Every function here returns an empty string on any failure (corrupt
+  zip, malformed XML, undecompressable stream) rather than raising --
+  callers already treat empty text as "nothing to index," so one bad
+  file never blocks an import run.
 """
 from __future__ import annotations
 
@@ -113,6 +131,7 @@ def read_pdf_best_effort(path: Path, max_bytes: int = 10_000_000) -> str:
         return ""
 
     chunks = []
+
     for match in re.finditer(rb"\((?:\\.|[^\\)])*\)", raw):
         value = match.group(0)[1:-1]
         value = value.replace(rb"\\(", b"(").replace(rb"\\)", b")").replace(rb"\\n", b"\n")

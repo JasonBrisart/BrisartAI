@@ -1,41 +1,66 @@
-"""brisart_ai/knowledge/synthesizer.py
+"""
+File: brisart_ai/knowledge/synthesizer.py
 
+Purpose
+-------
 Turns ranked documents into an answer by extracting the most relevant
 sentences and presenting them directly, followed by a plain source
 list. No "Observation:", "Confidence:", "Why I think this:", or
 "Suggested next move:" scaffolding -- just the information.
 
-**Why sentence selection is intent-aware.** A question's phrasing hints
-at the KIND of sentence that answers it, not just its topic words.
-Query classification is delegated entirely to `brisart_ai.intent`'s
-`detect_intent()` (the same classifier web search and offline ranking
-use) via three thin wrappers below, so there's exactly one place in the
-codebase deciding what kind of question a query is:
+A question's phrasing hints at the KIND of sentence that answers it,
+not just its topic words. Query classification is delegated entirely to
+brisart_ai.intent's detect_intent() (the same classifier web search and
+offline ranking use) via three thin wrappers, so there's exactly one
+place in the codebase deciding what kind of question a query is:
+statistic ("how many," "population," "percent") boosts sentences
+containing an actual numeric quantity; comparison ("vs," "outlive,"
+"better than") boosts sentences with comparative language; explanation
+("why...") boosts sentences with causal language ("because," "due to,"
+"caused by"). This is what stops "do dogs outlive cats" from returning a
+generic sentence about working dog breeds, and instead prefers a
+sentence that actually compares dog and cat lifespans.
 
-- Statistic ("how many," "population," "percent") -> boost sentences
-  containing an actual numeric quantity (`_HAS_QUANTITY` covers
-  currency, population/demographic units, distance, mass, and time --
-  broadened past an earlier population-only version so "how much does a
-  blue whale weigh" gets credit too).
-- Comparison ("vs," "outlive," "better than") -> boost sentences with
-  comparative language.
-- Explanation ("why...") -> boost sentences with causal language
-  ("because," "due to," "caused by").
+Communication / relationships
+------------------------------
+- brisart_ai/core/conversation.py: build_conversation_answer() calls
+  synthesize() as the final step once ranked documents exist.
+- Imports brisart_ai.intent.{INTENT_COMPARISON, INTENT_EXPLANATION,
+  INTENT_STATISTIC, detect_intent} and brisart_ai.util.{split_sentences,
+  tokenize}.
 
-This is what stops "do dogs outlive cats" from returning a generic
-sentence about working dog breeds, and instead prefers a sentence that
-actually compares dog and cat lifespans. These boosts only apply to
-sentences that already share at least one query term, so an unrelated
-sentence never gets surfaced just for containing the word "because."
+Settings / parameters
+----------------------
+- max_sources (default 6) / max_sentences (default 10): caps on how many
+  ranked documents are scanned for candidate sentences and how many
+  sentences the final answer quotes.
+- _HAS_QUANTITY: a digit-plus-scale/unit-word pattern covering currency,
+  population/demographic units, distance, mass, and time, used to detect
+  a genuinely numeric sentence for statistic-intent questions.
+- _HAS_COMPARISON_SIGNAL / _HAS_REASON_SIGNAL: comparative-language and
+  causal-language patterns for comparison/explanation-intent questions.
+- recent_topics: accepted but not yet used in scoring; it exists so
+  core/conversation.py can pass session-memory context without a future
+  signature change once that context is put to use.
 
-Chosen sentences are de-duplicated by a normalized key, so near-
-identical text repeated across multiple crawled pages of the same
-article collapses to one. When a quantity/comparison/reason signal is
-detected, chosen sentences are re-sorted so ANY matching sentence sorts
-before ANY non-matching one, regardless of raw score -- the single most
-useful sentence (a real number, a real comparison) leads the answer.
-Citations are renumbered sequentially in first-appearance order among
-kept sentences, so a removed duplicate never leaves a gap.
+Edge cases
+----------
+- These boosts only apply to sentences that already share at least one
+  query term, so an unrelated sentence never gets surfaced just for
+  containing the word "because."
+- Chosen sentences are de-duplicated by a normalized key
+  (_deduplication_key()), so near-identical text repeated across
+  multiple crawled pages of the same article collapses to one.
+- When a quantity/comparison/reason signal is detected, chosen sentences
+  are re-sorted so ANY matching sentence sorts before ANY non-matching
+  one, regardless of raw score -- the single most useful sentence (a
+  real number, a real comparison) leads the answer.
+- Citations are renumbered sequentially in first-appearance order among
+  kept sentences, so a removed duplicate never leaves a gap.
+- An empty docs list returns a fixed "I don't have any indexed
+  information..." message; a non-empty docs list with zero scoring
+  sentences returns a distinct "I found related sources, but..."
+  message, so the two different failure causes are never conflated.
 """
 from __future__ import annotations
 

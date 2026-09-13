@@ -1,15 +1,36 @@
-"""brisart_ai/knowledge/ingest.py
+"""
+File: brisart_ai/knowledge/ingest.py
 
+Purpose
+-------
 Local file/folder ingestion: reads every supported file under one or
 more paths and adds each to the index. All file-type dispatch lives in
-io/readers.py -- this module just reads, hashes, and adds. Called from
-ui/service.py's `import_paths()` (the "Import Files" sidebar action).
+io/readers.py -- this module just reads, hashes, and adds.
 
-A file that reads as empty text is skipped and not counted. A hash
-failure is logged but doesn't block indexing (the file is still added
-with an empty content_hash, since the hash is only used for duplicate
-detection). Any read/index failure for one file is caught and logged so
-a single bad file never aborts a whole folder import.
+Communication / relationships
+------------------------------
+- brisart_ai/ui/service.py: BrisartService.import_paths() is the sole
+  caller, invoked from the "Import Files" sidebar action.
+- Calls brisart_ai.io.readers.iter_supported_files() and read_file(),
+  brisart_ai.util.file_hash(), and index.add_source() on the Index
+  instance passed in.
+
+Settings / parameters
+----------------------
+- No module-level constants; behavior is driven entirely by the paths
+  and index passed to ingest_paths().
+
+Edge cases
+----------
+- A file that reads as empty text is skipped and not counted toward the
+  returned total.
+- A hash failure (OSError while reading for hashing) is logged but does
+  not block indexing -- the file is still added with an empty
+  content_hash, since the hash is only used for duplicate detection, not
+  as a requirement for indexing.
+- Any read/index failure for one file (OSError, UnicodeError, ValueError,
+  RuntimeError, or an unexpected exception) is caught and logged so a
+  single bad file never aborts a whole folder import.
 """
 from __future__ import annotations
 

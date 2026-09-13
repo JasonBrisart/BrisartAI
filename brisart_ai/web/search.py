@@ -1,5 +1,8 @@
-"""brisart_ai/web/search.py
+"""
+File: brisart_ai/web/search.py
 
+Purpose
+-------
 Dependency-free public web search across seven providers, tried in
 order from MOST likely to be blocked to LEAST likely: Startpage -> Brave
 Search -> DuckDuckGo HTML -> DuckDuckGo Lite -> Bing HTML -> Mojeek ->
@@ -18,20 +21,20 @@ results are normalized (tracking params stripped, redirect wrappers
 unwound), deduplicated, and relatedness-filtered per result before
 being handed back to the crawler.
 
-**Two different extraction strategies, because two different levels of
-markup knowledge exist.** For DuckDuckGo and Bing, `_ResultLinkParser`
-recognizes known result-link CSS classes or anchors nested in `<h2>`/
-`<h3>` result-title headings. For Mojeek/Brave/Startpage, whose markup
-is either undocumented or changes often (Brave's own scraping notes
-call their result markup "unlabeled" and something that "shifts
-often"), `_extract_result_links()` instead uses domain-based heuristics
--- a link's host must simply differ from the search engine's own host
-and not be one of its help/account/static subdomains. This is less
-precise on day one than a hand-tuned selector, but degrades gracefully
-("still gets titles and URLs, maybe a rougher snippet") instead of
-silently returning nothing the next time markup changes.
+Two different extraction strategies, because two different levels of
+markup knowledge exist. For DuckDuckGo and Bing, _ResultLinkParser
+recognizes known result-link CSS classes or anchors nested in <h2>/<h3>
+result-title headings. For Mojeek/Brave/Startpage, whose markup is
+either undocumented or changes often (Brave's own scraping notes call
+their result markup "unlabeled" and something that "shifts often"),
+_extract_result_links() instead uses domain-based heuristics -- a
+link's host must simply differ from the search engine's own host and
+not be one of its help/account/static subdomains. This is less precise
+on day one than a hand-tuned selector, but degrades gracefully ("still
+gets titles and URLs, maybe a rougher snippet") instead of silently
+returning nothing the next time markup changes.
 
-**IMPORTANT -- unverified against a live fetch.** The exact current HTML
+IMPORTANT -- unverified against a live fetch. The exact current HTML
 structure of Mojeek, Brave Search, and Startpage was not verified
 against a live fetch during development. If one of these providers
 returns zero results for a query known to have results, it's most
@@ -39,8 +42,8 @@ likely serving a challenge/consent page, or its markup has changed
 enough that even the generic extractor can no longer find outbound
 links.
 
-**Per-result relatedness, not per-batch.** `_partition_related_results()`
-judges each `(url, title)` pair individually against the query's
+Per-result relatedness, not per-batch. _partition_related_results()
+judges each (url, title) pair individually against the query's
 meaningful terms, rather than the older whole-batch check (which only
 asked "does *any* result in this batch share a query term?" -- a single
 good result waved an entire batch through, garbage included). A single
@@ -50,13 +53,54 @@ still treated as a throttled/decoy response and the whole batch is
 discarded, preserving the old whole-batch safety valve as a special
 case.
 
-`_decode_bing_target()` unwraps Bing's `/ck/a` click-tracking redirect
-(base64url-decoding the `u` parameter after its short encoding-tag
-prefix); if unwrapping fails for any reason, the original wrapped URL is
-returned unchanged rather than raising. `_normalize_result_url()`
-rejects a candidate outright if its host is one of the search engine's
-own hosts or a blocked dictionary host, independent of the later
-relatedness partitioning.
+Communication / relationships
+------------------------------
+- brisart_ai/web/crawler.py: web_search_and_ingest() is the sole caller
+  of search_public_web(), requesting titles via with_titles=True.
+- scripts/debug_search_replay.py: calls search_public_web() directly to
+  replay the provider chain outside the crawler.
+- Imports brisart_ai.blocklist.{FUNCTION_WORDS, is_blocked_web_host},
+  brisart_ai.util.normalize_url, brisart_ai.web.fetcher.{MAX_PAGE_BYTES,
+  REQUEST_TIMEOUT}, and brisart_ai.web.policy.USER_AGENT.
+
+Settings / parameters
+----------------------
+- Provider URLs: DUCKDUCKGO_HTML_URL, DUCKDUCKGO_LITE_URL,
+  BING_SEARCH_URL, MOJEEK_SEARCH_URL, BRAVE_SEARCH_URL,
+  STARTPAGE_SEARCH_URL, WIKIPEDIA_API_URL/WIKIPEDIA_ARTICLE_BASE.
+- _BLOCK_MARKERS / _CHALLENGE_MARKERS: substrings that mark a returned
+  page as a bot-challenge, rate-limit, or consent wall rather than real
+  results.
+- _SEARCH_HOSTS: the search engines' own hosts (and known account/help
+  subdomains), excluded from results so a provider's own chrome is never
+  mistaken for an organic result.
+- _RESULT_LINK_CLASSES / _RESULT_TITLE_TAGS: DuckDuckGo/Bing-specific
+  CSS classes and heading tags used by _ResultLinkParser.
+- search_public_web(with_titles=False): default return type is
+  list[str] of URLs (backward compatible with every pre-beta.8 caller);
+  with_titles=True returns list[tuple[str, str]] of (url, title) pairs.
+
+Edge cases
+----------
+- _decode_bing_target() unwraps Bing's /ck/a click-tracking redirect
+  (base64url-decoding the u parameter after its short encoding-tag
+  prefix); if unwrapping fails for any reason, the original wrapped URL
+  is returned unchanged rather than raising.
+- _normalize_result_url() rejects a candidate outright if its host is
+  one of the search engine's own hosts or a blocked dictionary host,
+  independent of the later relatedness partitioning.
+- _partition_related_results(): if `query` has no meaningful terms
+  (4+ letter words that aren't common function words), every result is
+  treated as related; if partitioning would drop every result, that's
+  evidence of a throttled/decoy response and callers discard the whole
+  batch.
+- Every provider function is implemented directly in this file rather
+  than a companion module -- a previous split caused a real startup
+  crash when a companion module existed on disk but was accidentally
+  left empty, and this module's top-level import from it raised
+  ImportError before the app could even start. Keeping every provider in
+  one file means there's nothing else that needs to exist and nothing
+  else to keep in sync.
 """
 from __future__ import annotations
 
@@ -231,6 +275,7 @@ def _http_post(url: str, parameters: Dict[str, str]) -> Optional[str]:
     headers["Content-Type"] = "application/x-www-form-urlencoded"
     headers["Origin"] = "https://duckduckgo.com"
     headers["Referer"] = "https://duckduckgo.com/"
+
     request = urllib.request.Request(url, data=encoded, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
@@ -321,6 +366,7 @@ def _decode_duckduckgo_target(url: str) -> str:
         parsed = urllib.parse.urlsplit(url)
     except ValueError:
         return ""
+
     if "duckduckgo.com" not in parsed.netloc.casefold():
         return url
 
@@ -351,6 +397,7 @@ def _decode_bing_target(url: str) -> str:
         parsed = urllib.parse.urlsplit(url)
     except ValueError:
         return url
+
     if "bing.com" not in parsed.netloc.casefold():
         return url
     if not parsed.path.casefold().endswith("/ck/a"):
@@ -366,11 +413,13 @@ def _decode_bing_target(url: str) -> str:
         return url
     payload = encoded[2:] if len(encoded) > 2 else encoded
     padding = "=" * (-len(payload) % 4)
+
     try:
         decoded_bytes = base64.urlsafe_b64decode(payload + padding)
         decoded = decoded_bytes.decode("utf-8", errors="replace")
     except Exception:
         return url
+
     return decoded if decoded.startswith(("http://", "https://")) else url
 
 
@@ -385,6 +434,7 @@ def _strip_embedded_markup(text: str) -> str:
     candidate = str(text or "").strip()
     if "<" not in candidate or "href" not in candidate.casefold():
         return candidate
+
     marker = "href="
     lowered = candidate.casefold()
     start = lowered.find(marker)
@@ -406,6 +456,7 @@ def _normalize_result_url(href: str, base_url: str) -> str:
     candidate = html.unescape(_strip_embedded_markup(href))
     if not candidate:
         return ""
+
     lowered = candidate.casefold()
     if lowered.startswith(_IGNORED_SCHEMES):
         return ""
@@ -426,6 +477,7 @@ def _normalize_result_url(href: str, base_url: str) -> str:
         parsed = urllib.parse.urlsplit(candidate)
     except ValueError:
         return ""
+
     if parsed.scheme not in {"http", "https"}:
         return ""
     if not parsed.hostname:
@@ -434,6 +486,7 @@ def _normalize_result_url(href: str, base_url: str) -> str:
         return ""
     if is_blocked_web_host(candidate):
         return ""
+
     return candidate
 
 
@@ -474,6 +527,7 @@ def _parse_html_results(raw_html: str, base_url: str, limit: int) -> List[Tuple[
         result_url = _normalize_result_url(href, base_url)
         if result_url:
             candidates.append((result_url, visible_text))
+
     return _deduplicate(candidates, limit)
 
 
@@ -714,7 +768,6 @@ def _run_extra_provider(provider_label: str, search_url: str, engine_host: str, 
                 f"(fetched {len(raw_html)} chars)."
             )
         )
-
     return ProviderOutcome(results=results, debug_note=f"{provider_label}: {len(results)} result(s) parsed.")
 
 

@@ -1,29 +1,51 @@
-"""brisart_ai/io/extractor.py
+"""
+File: brisart_ai/io/extractor.py
 
-Two text-extraction helpers: `html_to_text()` and `csv_to_text()`.
-web/fetcher.py calls `html_to_text()` on every fetched web page;
-io/readers.py calls it for local .html/.htm/.svg files and calls
-`csv_to_text()` for local .csv files.
-
-`HTMLTextExtractor` is an `html.parser.HTMLParser` subclass that skips
-`<script>`/`<style>`/`<svg>`/etc. entirely, inserts a newline at block-
-level tag boundaries so paragraphs and list items don't run together,
-and collects `<a href>` targets (resolved against `base_url`, de-duped,
+Purpose
+-------
+Two text-extraction helpers: html_to_text() and csv_to_text().
+HTMLTextExtractor is an html.parser.HTMLParser subclass that skips
+<script>/<style>/<svg>/etc. entirely, inserts a newline at block-level
+tag boundaries so paragraphs and list items don't run together, and
+collects <a href> targets (resolved against base_url, de-duped,
 http(s)-only) as a side channel of discovered links for the crawler to
 follow.
 
-One deliberate special case: `<sup class="reference">[3]</sup>` -- the
-MediaWiki-style footnote marker Wikipedia and its mirrors use -- is
-skipped too. Without this, extracted article text and quoted answers
-would occasionally have a stray "[ 3 ]" glued onto the start of a
-sentence. It's scoped narrowly to `<sup>` tags carrying a
-reference/citation class, so an ordinary superscript like "10^2" is
-untouched.
+Communication / relationships
+------------------------------
+- brisart_ai/web/fetcher.py: calls html_to_text() on every fetched web
+  page.
+- brisart_ai/io/readers.py: calls html_to_text() for local .html/.htm/
+  .svg files and csv_to_text() for local .csv files.
+- Imports brisart_ai.util.normalize_url() to resolve/clean discovered
+  links.
 
-`csv_to_text()` converts each row to a pipe-separated line via
-`csv.reader`, falling back to a naive comma-to-pipe line split if the
-CSV is malformed enough to make `csv.reader` choke -- some searchable
-text is better than none.
+Settings / parameters
+----------------------
+- HTMLTextExtractor.SKIP_TAGS: tags whose content is never emitted as
+  text (script, style, noscript, svg, canvas, template).
+- HTMLTextExtractor.BLOCK_TAGS: tags that insert a newline boundary so
+  block-level content doesn't run together in the extracted text.
+- REFERENCE_MARKER_TAGS / REFERENCE_MARKER_CLASSES: <sup> tags carrying
+  a reference/citation-style class are skipped entirely -- see Edge
+  cases below.
+- csv_to_text(): converts each row to a pipe-separated line via
+  csv.reader.
+
+Edge cases
+----------
+- One deliberate special case: <sup class="reference">[3]</sup> -- the
+  MediaWiki-style footnote marker Wikipedia and its mirrors use -- is
+  skipped too. Without this, extracted article text and quoted answers
+  would occasionally have a stray "[ 3 ]" glued onto the start of a
+  sentence. It's scoped narrowly to <sup> tags carrying a reference/
+  citation class, so an ordinary superscript like "10^2" is untouched.
+- csv_to_text() falls back to a naive comma-to-pipe line split if the
+  CSV is malformed enough to make csv.reader choke (csv.Error or
+  UnicodeError) -- some searchable text is better than none.
+- html_to_text() wraps parser.feed()/close() in a try/except so a
+  malformed HTML document still returns whatever was extracted before
+  the parser gave up, rather than raising.
 """
 from __future__ import annotations
 
@@ -42,7 +64,6 @@ class HTMLTextExtractor(HTMLParser):
     """Extract readable text, page titles, and links from HTML."""
 
     SKIP_TAGS = {"script", "style", "noscript", "svg", "canvas", "template"}
-
     BLOCK_TAGS = {
         "p", "div", "section", "article", "aside", "header", "footer",
         "main", "nav", "br", "li", "ul", "ol", "table", "tr", "td",
@@ -91,8 +112,10 @@ class HTMLTextExtractor(HTMLParser):
             return
         if self._reference_skip_depth:
             return
+
         if tag == "title":
             self._in_title = True
+
         if tag == "a":
             href = dict(attrs).get("href")
             if href:
@@ -100,6 +123,7 @@ class HTMLTextExtractor(HTMLParser):
                 link = normalize_url(absolute)
                 if link.startswith(("http://", "https://")):
                     self.links.append(link)
+
         if tag in self.BLOCK_TAGS:
             self.text_parts.append("\n")
 
@@ -123,8 +147,10 @@ class HTMLTextExtractor(HTMLParser):
             return
         if self._reference_skip_depth:
             return
+
         if tag == "title":
             self._in_title = False
+
         if tag in self.BLOCK_TAGS:
             self.text_parts.append("\n")
 
@@ -146,12 +172,14 @@ class HTMLTextExtractor(HTMLParser):
         text = re.sub(r" *\n *", "\n", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
         text = text.strip()
+
         unique_links: List[str] = []
         seen = set()
         for link in self.links:
             if link and link not in seen:
                 seen.add(link)
                 unique_links.append(link)
+
         return title, text, unique_links
 
 
@@ -178,6 +206,7 @@ def csv_to_text(source: str) -> str:
         return "\n".join(output)
     except (csv.Error, UnicodeError):
         pass
+
     for raw_line in source.splitlines():
         line = raw_line.strip()
         if line:

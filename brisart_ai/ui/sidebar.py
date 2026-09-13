@@ -1,16 +1,35 @@
-"""brisart_ai/ui/sidebar.py
+"""
+File: brisart_ai/ui/sidebar.py
 
+Purpose
+-------
 The left-hand nav: app name/version header, the five core action
 buttons (Import Files, Add Note, Research Web, Settings, Help), and a
 status line pinned to the bottom showing indexed source counts.
-ui/app.py builds one `Sidebar(master, actions)` with a dict mapping
-each button's key to its handler, and calls `set_status(total, files,
-web)` after every answer/import/note action to keep the counts fresh --
-this widget only displays numbers it's handed, it doesn't count
-anything itself.
 
-Fixed width (`theme.SIDEBAR_WIDTH`) via `pack_propagate(False)`, so it
-never resizes to fit button label length.
+Communication / relationships
+------------------------------
+- brisart_ai/ui/app.py: builds one Sidebar(master, actions) with a dict
+  mapping each button's key to its handler, and calls set_status(total,
+  files, web) after every answer/import/note action.
+- Imports brisart_ai.ui.theme for colors/fonts/spacing and
+  brisart_ai.version_info for APP_NAME/__version__.
+
+Settings / parameters
+----------------------
+- actions: dict mapping button key ("import"/"note"/"research"/
+  "settings"/"help") to its zero-argument handler.
+- theme.SIDEBAR_WIDTH: fixed pixel width, enforced via
+  pack_propagate(False) so long button labels never resize the sidebar.
+
+Edge cases
+----------
+- set_status() only displays numbers it is handed -- this widget does
+  not count anything itself; the caller is responsible for supplying
+  fresh counts.
+- Each button's key is bound as a default argument (k=key) in its
+  command lambda, so every button invokes its own action rather than
+  whichever key the construction loop last landed on.
 """
 from __future__ import annotations
 

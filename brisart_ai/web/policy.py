@@ -1,26 +1,46 @@
-"""brisart_ai/web/policy.py
+"""
+File: brisart_ai/web/policy.py
 
+Purpose
+-------
 Internet-access safety policy: refuse local/private network destinations
 outright, and honor robots.txt for every public host BrisartAI crawls
 (cached per site so a host is never re-fetched twice in one run).
-web/crawler.py builds one `RobotsCache()` per crawl and calls
-`.allowed(url)` before every fetch. `USER_AGENT` (version-stamped via
-version_info.py) is sent with every outbound request in the whole
-codebase -- web/fetcher.py and web/search.py both import it from here.
 
-The important design decision: if robots.txt is missing, unreachable,
-too large, malformed, or returns 401/403 (read as "we can't tell what
-the policy is," not "this request is denied"), crawling is ALLOWED, not
-blocked. A retrieval failure must never be read as an explicit site-wide
-denial -- otherwise one flaky DNS hiccup would silently block an entire
-domain for the rest of the run. The only path that can genuinely deny a
-URL is a robots.txt that was successfully fetched, parsed, and
-explicitly disallows this user agent for that specific path.
+Communication / relationships
+------------------------------
+- brisart_ai/web/crawler.py: builds one RobotsCache() per crawl and
+  calls .allowed(url) before every fetch.
+- brisart_ai/web/fetcher.py and brisart_ai/web/search.py: both import
+  USER_AGENT from here, so every outbound request in the whole codebase
+  carries the same, version-stamped identifier.
+- Imports brisart_ai.version_info.__version__ to build USER_AGENT.
 
-`is_local_or_private_host()` recognizes localhost and its variants,
-`.local`/`.localhost` suffixed hosts, and any IP address `ipaddress`
-classifies as private/loopback/link-local/multicast/reserved/
-unspecified -- this check runs before any network access at all.
+Settings / parameters
+----------------------
+- USER_AGENT: "BrisartAI/{__version__} (local-first research assistant;
+  respectful public-web crawler)" -- version-stamped via version_info.py.
+- ROBOTS_TIMEOUT (8 seconds) / MAX_ROBOTS_BYTES (512,000): bound how
+  long and how much of a robots.txt fetch is allowed to take.
+
+Edge cases
+----------
+- The important design decision: if robots.txt is missing, unreachable,
+  too large, malformed, or returns 401/403 (read as "we can't tell what
+  the policy is," not "this request is denied"), crawling is ALLOWED,
+  not blocked. A retrieval failure must never be read as an explicit
+  site-wide denial -- otherwise one flaky DNS hiccup would silently
+  block an entire domain for the rest of the run. The only path that can
+  genuinely deny a URL is a robots.txt that was successfully fetched,
+  parsed, and explicitly disallows this user agent for that specific
+  path.
+- is_local_or_private_host() recognizes localhost and its variants,
+  .local/.localhost suffixed hosts, and any IP address ipaddress
+  classifies as private/loopback/link-local/multicast/reserved/
+  unspecified -- this check runs before any network access at all.
+- RobotsCache caches a None value (meaning "no parser, allow") just as
+  readily as a real parsed RobotFileParser, so a site whose robots.txt
+  failed once is not re-fetched again within the same run.
 """
 from __future__ import annotations
 

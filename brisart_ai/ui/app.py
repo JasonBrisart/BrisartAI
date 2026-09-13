@@ -1,27 +1,52 @@
-"""brisart_ai/ui/app.py
+"""
+File: brisart_ai/ui/app.py
 
+Purpose
+-------
 The BrisartAI desktop window -- the only entry point for the program
-(pure Python/Tkinter, no third-party GUI deps). `brisartai.py` calls
-`run()`, the sole external-facing function here besides `BrisartApp`
+(pure Python/Tkinter, no third-party GUI deps). brisartai.py calls
+run(), the sole external-facing function here besides BrisartApp
 itself.
 
-Construction order in `BrisartApp.__init__` matters: `BrisartService` is
-built BEFORE the Tk window (`super().__init__()`), specifically so a
-startup failure opening the SQLite index propagates out of the
-constructor with NO Tk window ever created. `run()` wraps that
-construction in a single try/except and hands any failure to
-`_show_startup_error()`, which spins up a throwaway hidden `tk.Tk()`
-purely to host a proper error dialog -- the alternative, a half-built
-invisible window plus a console traceback, is what this replaced.
+Communication / relationships
+------------------------------
+- brisartai.py: the only caller of run().
+- Constructs brisart_ai.ui.service.BrisartService,
+  brisart_ai.ui.sidebar.Sidebar, brisart_ai.ui.chat_panel.ChatPanel, and
+  brisart_ai.ui.dialogs.{SettingsDialog,ask_import_path,ask_note,
+  ask_text}.
+- Imports brisart_ai.ui.theme for palette/spacing and
+  brisart_ai.version_info.{APP_NAME,__version__} for the window title
+  and startup banner.
 
-`_answer_question()` runs the actual search on a background thread
-(`threading.Thread(..., daemon=True)`) so the Tk main loop keeps
-repainting instead of freezing, marshaling the result back to the main
-thread via `self.after(0, ...)`. Only one request is in flight at a
-time (`self._busy`); a second question typed before the first answers
-is simply ignored rather than queued. `force_web=None` (ordinary typed
-questions) defers to the Automatic Web Research setting; the "Research
-Web" sidebar action passes `force_web=True` to force a fresh search.
+Settings / parameters
+----------------------
+- Construction order in BrisartApp.__init__ matters: BrisartService is
+  built BEFORE the Tk window (super().__init__()), specifically so a
+  startup failure opening the SQLite index propagates out of the
+  constructor with NO Tk window ever created.
+- self._busy: only one request is in flight at a time; a second
+  question typed before the first answers is simply ignored rather than
+  queued.
+- force_web=None (ordinary typed questions) defers to the Automatic Web
+  Research setting; the "Research Web" sidebar action passes
+  force_web=True to force a fresh search.
+
+Edge cases
+----------
+- run() wraps app construction in a single try/except and hands any
+  failure to _show_startup_error(), which spins up a throwaway hidden
+  tk.Tk() purely to host a proper error dialog -- the alternative, a
+  half-built invisible window plus a console traceback, is what this
+  replaced.
+- _answer_question() runs the actual search on a background thread
+  (threading.Thread(..., daemon=True)) so the Tk main loop keeps
+  repainting instead of freezing, marshaling the result back to the main
+  thread via self.after(0, ...).
+- _on_answer_ready() catches any exception raised inside the worker and
+  turns it into a plain "Something went wrong answering that: ..."
+  message rather than letting the background thread's exception be
+  silently swallowed or crash the app.
 """
 from __future__ import annotations
 
@@ -48,6 +73,7 @@ Core actions (left sidebar):
   Help            show this message
 
 Just type a question in the chat box below and press Enter.
+
 Notes and imported files are searched the same way web results are --
 ask a question and BrisartAI will pull from anything relevant it has
 indexed, including your notes."""
@@ -57,9 +83,9 @@ class BrisartApp(tk.Tk):
     def __init__(self, db_path: str = DEFAULT_DB):
         # Service built BEFORE the Tk window exists (see module docstring).
         service = BrisartService(db_path)
+
         super().__init__()
         self.service = service
-
         self.title(f"{APP_NAME} {__version__}")
         self.geometry("980x640")
         self.minsize(760, 480)
@@ -75,7 +101,6 @@ class BrisartApp(tk.Tk):
             f"{APP_NAME} {__version__} ready. Type a question below and "
             "press Enter -- I'll search the web and answer here."
         )
-
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _configure_style(self) -> None:
@@ -121,7 +146,6 @@ class BrisartApp(tk.Tk):
             return
 
         self._busy = True
-
         searching_web = (
             force_web
             if force_web is not None

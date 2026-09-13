@@ -1,32 +1,57 @@
-"""brisart_ai/ui/service.py
+"""
+File: brisart_ai/ui/service.py
 
+Purpose
+-------
 The backend facade every UI widget goes through instead of touching
-`Index`/`SessionMemory`/`ResearchSettings` directly, so ingestion,
-search, settings, and notes have exactly one implementation shared by
-the desktop UI (and any future interface).
+Index/SessionMemory/ResearchSettings directly, so ingestion, search,
+settings, and notes have exactly one implementation shared by the
+desktop UI (and any future interface).
 
-Construction order matters: `Index`/`SessionMemory` are built with NO
-try/except around them, deliberately. A locked, read-only, or otherwise
-unopenable database must propagate straight out of `__init__` uncaught,
-so `ui/app.py`'s `run()` can catch it in exactly one place and show a
-friendly dialog instead of a raw traceback. Two cleanup passes run at
-startup as a side effect of construction: stale dictionary/definition
-web pages get purged, and any notes saved before note-mirroring existed
-get reindexed for ranked search -- both print a summary line only when
-they actually did something, so a clean startup stays quiet.
+Communication / relationships
+------------------------------
+- brisart_ai/ui/app.py: constructs the single BrisartService instance
+  and calls .ask(), .import_paths(), .add_note(), .counts() from the
+  main thread and the background answer-worker thread.
+- Owns and constructs brisart_ai.knowledge.index.Index,
+  brisart_ai.core.session_memory.SessionMemory, and
+  brisart_ai.core.settings.ResearchSettings.
+- Calls brisart_ai.core.conversation.build_conversation_answer(),
+  brisart_ai.knowledge.ingest.ingest_paths(),
+  brisart_ai.knowledge.vault.{add_note,list_notes,reindex_missing_notes,
+  search_notes}, and brisart_ai.web.crawler.web_search_and_ingest().
 
-`ask()` is the one method `ui/app.py`'s background worker thread calls.
-When `force_web=None` (ordinary typed questions), the web-search
-decision is deferred to the `auto_web_research` setting; the explicit
-"Research Web" action passes `force_web=True` to force a fresh search
-regardless. Diagnostic print() output from the crawler/search/policy
-layers during a call is captured (via `contextlib.redirect_stdout`) and
-filtered down to just the WARN/SKIP/ERROR lines worth surfacing in the
-chat transcript, available afterward as `last_diagnostics`.
+Settings / parameters
+----------------------
+- __init__(db_path): construction is deliberately unguarded -- Index/
+  SessionMemory are built with NO try/except around them, so a locked,
+  read-only, or otherwise unopenable database propagates straight out of
+  __init__, letting ui/app.py's run() catch it in exactly one place and
+  show a friendly dialog instead of a raw traceback.
+- Two cleanup passes run at startup as a side effect of construction:
+  stale dictionary/definition web pages get purged
+  (purge_blocked_web_sources()), and any notes saved before note-
+  mirroring existed get reindexed for ranked search
+  (reindex_missing_notes()) -- both print a summary line only when they
+  actually did something, so a clean startup stays quiet.
+- ask(text, force_web=None): when force_web=None (ordinary typed
+  questions), the web-search decision is deferred to the
+  auto_web_research setting; the explicit "Research Web" action passes
+  force_web=True to force a fresh search regardless.
+- _DIAGNOSTIC_MARKERS / _MAX_DIAGNOSTIC_LINES: diagnostic print() output
+  from the crawler/search/policy/fetcher layers during a call is
+  captured (via contextlib.redirect_stdout) and filtered down to just
+  the WARN/SKIP/ERROR lines worth surfacing in the chat transcript,
+  available afterward as last_diagnostics.
 
-Notes route through `knowledge/vault.py`'s helpers; collections, entity
-extraction, and timeline features from vault.py are intentionally not
-wired in here to keep the UI's surface small.
+Edge cases
+----------
+- self._stdout_lock guards stdout redirection in ask(); the app's _busy
+  flag already prevents overlapping requests from the UI, but this keeps
+  the service itself safe if called from elsewhere too.
+- Notes route through knowledge/vault.py's helpers; collections, entity
+  extraction, and timeline features from vault.py are intentionally not
+  wired in here, to keep the UI's surface small.
 """
 from __future__ import annotations
 
@@ -59,6 +84,7 @@ class BrisartService:
 
     def __init__(self, db_path: str = DEFAULT_DB):
         self.db_path = db_path
+
         # Deliberately unguarded -- see module docstring.
         self.index = Index(db_path)
 
