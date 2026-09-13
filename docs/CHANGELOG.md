@@ -9,11 +9,8 @@
   BrisartAI package tree (`brisart_ai/` and its `core/`, `io/`,
   `knowledge/`, `ui/`, `web/` subfolders, plus `brisartai.py` and both
   `scripts/debug_*.py` files).
-- First pass used one rigid four-section template
-  (`Purpose` / `Communication relationships` / `Settings-parameters` /
-  `Edge-case behavior`) on every file regardless of size or complexity.
-- Second pass replaced that with documentation depth scaled to each
-  file's actual complexity instead of a forced template:
+- First pass used documentation depth scaled to each file's actual
+  complexity instead of a forced template:
   - **Trivial** files (`version_info.py`, `ui/theme.py`, `web/models.py`,
     `web/stats.py`, `io/input_cleaner.py`, `brisartai.py`) — one tight
     paragraph, no sections.
@@ -28,6 +25,9 @@
     `knowledge/synthesizer.py`, `web/crawler.py`, `web/search.py`,
     `util.py`) — full narrative explanation of the non-obvious design
     decisions, structured per-file rather than forced into one shape.
+- Second pass replaced that with one rigid four-section template
+  (`Purpose` / `Communication relationships` / `Settings-parameters` /
+  `Edge-case behavior`) on every file regardless of size or complexity.
 
 ---
 
