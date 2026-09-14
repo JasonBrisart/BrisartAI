@@ -58,7 +58,7 @@ Source-grounded desktop UI            (ui/)
 
 Full request flow, storage schema, the ranking pipeline, and a "where do I change X?" map live in **[`ARCHITECTURE.md`](ARCHITECTURE.md)**.
 
-BrisartAI also ships the **Brisart Native Stack** — pure-Python, from-spec reimplementations of the stdlib primitives it relies on (SHA-256, Base64, DEFLATE, URL/JSON/HTML parsing, robots.txt), each verified against the stdlib and wired into production. Details and verification: **[`brisart_ai/native/README.md`](brisart_ai/native/README.md)**.
+BrisartAI also ships the **Brisart Native Stack** — pure-Python, from-spec reimplementations of the stdlib primitives it relies on (SHA-256, Base64, DEFLATE, URL/JSON/HTML parsing, robots.txt), each verified against the stdlib and wired into production. Details and verification live in `brisart_ai/native/README.md`, alongside that package's source.
 
 ---
 
@@ -82,11 +82,13 @@ BrisartAI/
 └── version.py       Canonical release version
 ```
 
-Each source package carries its own `README.md`; file-level docstrings own each module's contract, parameters, relationships, and edge cases.
+Each source package carries its own `README.md` beside its code; file-level docstrings own each module's contract, parameters, relationships, and edge cases.
 
 ---
 
 ## Documentation
+
+Everything below lives in the `docs/` folder and cross-links freely within it:
 
 | Document | Owns |
 |---|---|
@@ -95,6 +97,15 @@ Each source package carries its own `README.md`; file-level docstrings own each 
 | [`SECURITY.md`](SECURITY.md) | Private vulnerability reporting, security scope, air-gapped policy |
 | [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) | Open and resolved issues (standardized bug-report format) |
 | [`CHANGELOG.md`](CHANGELOG.md) | Full release history |
-| [`native/README.md`](native/README.md) | The Brisart Native Stack and its verification |
 
-Each fact has exactly one authoritative home — this README points to it rather than duplicating it. Security details are in `SECURITY.md`; the honest limitations list is in `KNOWN_ISSUES.md`; supported file types are documented in [`brisart_ai/io/README.md`](brisart_ai/io/README.md).
+Package-level documentation lives beside its own code rather than in `docs/`, so it isn't linked from here — see `README.md` inside each `brisart_ai/` subfolder (for example `brisart_ai/native/README.md` for the Native Stack, or `brisart_ai/io/README.md` for supported file types).
+
+Each fact has exactly one authoritative home. Security details are in `SECURITY.md`; the honest limitations list is in `KNOWN_ISSUES.md`.
+
+---
+
+## Licensing & author
+
+Released under the **Brisart Ecosystem License** — official releases are free for operational use; modification/forking/commercialization rights require an active subscription (see the repository's license terms for the authoritative details).
+
+Created and maintained by **Jason Brisart** as part of the Brisart research tooling ecosystem.
