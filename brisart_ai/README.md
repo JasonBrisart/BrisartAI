@@ -1,40 +1,62 @@
-# brisart_ai/ui/
+# brisart_ai/
 
-The BrisartAI desktop application — pure Python/Tkinter, no third-party GUI dependency. BrisartAI is GUI-only; there is no terminal CLI/chat mode.
+The BrisartAI Python package — everything the application is made of. This top-level folder holds the seven feature packages plus the small shared modules they all depend on.
+
+> **Note:** in the current repository, this file was accidentally a byte-for-byte copy of `brisart_ai/web/README.md`. This is the corrected, package-level version.
 
 ```text
-ui/
-├── app.py           The desktop window — construction, layout, event wiring
-├── service.py       Backend facade every widget goes through
-├── chat_panel.py    Scrollable transcript + single-line input box
-├── sidebar.py       Left-hand nav: app name, core actions, status line
-├── dialogs.py       Modal prompts (import, note, settings)
-└── theme.py         The one shared dark color palette and font tuples
+brisart_ai/
+├── core/            Answer routing, session memory, persistent settings
+├── io/              Reading local files into searchable text
+├── knowledge/       SQLite index, ranking, relevance, synthesis, vault
+├── native/          The Brisart Native Stack (pure-Python stdlib replacements)
+├── ui/              The Tkinter desktop app and its service boundary
+├── web/             Optional public web search, fetch, and crawl policy
+├── tests/           Tests for the four shared modules below
+├── blocklist.py     Shared junk-host / function-word policy
+├── intent.py        Query- and answer-intent classification
+├── util.py          Shared tokenize / hash / URL / sentence toolbox
+└── version_info.py  Loads the canonical version string from version.py
 ```
 
----
-
-## `app.py`
-
-`BrisartApp(tk.Tk)` is the entry point (`run()` is the only other externally-facing function; `run.py` calls it with no arguments). **Construction order matters:** `BrisartService` is built *before* `super().__init__()` creates the Tk window — specifically so a startup failure opening the SQLite index (locked by another running copy, a read-only install folder, missing permissions) propagates out of the constructor with no Tk window ever created, letting `run()` catch it in exactly one `try/except` and show a friendly `messagebox.showerror()` dialog instead of a raw console traceback.
-
-`_answer_question()` runs the actual search on a background thread so the Tk main loop keeps repainting instead of freezing, marshaling the result back via `self.after(0, ...)`. `self._busy` ensures only one request is in flight at a time — a second question typed before the first answers is simply ignored, not queued.
+Each feature package carries its own `README.md`. Start with [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) for the full request flow and dependency rules; this file covers only the four shared modules that live directly here.
 
 ---
 
-## `service.py`
+## The dependency floor
 
-The backend facade every widget goes through instead of touching `Index`/`SessionMemory`/`ResearchSettings` directly. Construction is deliberately unguarded — no `try/except` around opening the index or session memory — so a construction failure propagates straight out to `app.py`'s single catch site.
+These four modules sit at the bottom of BrisartAI's *own* import graph. They may be imported from anywhere above; they import nothing from `core/`, `knowledge/`, `io/`, `ui/`, or `web/`. Their only downward dependency is `native/`, which knows nothing about BrisartAI at all.
 
-Two cleanup passes run once at startup, as a side effect of construction: stale dictionary/definition web pages are purged, and any notes saved before note-mirroring existed are reindexed for ranked search.
-
-`ask(text, force_web=None)`: `None` (ordinary typed questions) defers the web-search decision to the `auto_web_research` setting; the explicit "Research Web" sidebar action passes `force_web=True`. Diagnostic `print()` output from the crawler/search/policy/fetcher layers during a call is captured via `contextlib.redirect_stdout` and filtered down to just the WARN/SKIP/ERROR lines worth surfacing in the chat transcript.
+This is deliberate. It is exactly why `blocklist.py` lives here rather than inside `web/`: `knowledge/index.py` needs to purge junk web rows, and it must be able to do that without the knowledge layer taking a dependency on the web layer.
 
 ---
 
-## `chat_panel.py`, `sidebar.py`, `dialogs.py`, `theme.py`
+## `util.py`
 
-- **`chat_panel.py`** — the scrollable, read-only transcript (`state="disabled"` outside of `append()`) plus the single-line input box. Calls `on_submit(text)` on Enter or Send-click.
-- **`sidebar.py`** — app name/version header, the five core action buttons (Import Files, Add Note, Research Web, Settings, Help), and a status line showing indexed source counts.
-- **`dialogs.py`** — the small modal prompts `app.py`'s sidebar actions need: a file/folder picker, a generic text prompt, a two-step title/body prompt for notes, and `SettingsDialog` (one checkbox per toggle in `core/settings.py`'s `TOGGLE_LABELS`, writing directly to the live `ResearchSettings` instance on every click).
-- **`theme.py`** — the single dark palette, font tuples, and two spacing constants every widget shares. Pure constants, no Tk imports — importing it never has side effects and never requires a display, which is what makes it (along with `service.py`) headlessly testable.
+The one shared, dependency-free toolbox every other layer imports from:
+
+- **`tokenize()`** — lowercases, splits on word boundaries, drops single-character words and a small English stopword set. Returns `[]` for `None` or `""` rather than raising.
+- **`stable_hash()` / `file_hash()`** — SHA-256 fingerprints (via the native `brisart_hash`) for stable source keys and file de-duplication. `file_hash()` streams a file in 1 MB chunks rather than reading it whole.
+- **`normalize_url()` / `same_site()`** — URL normalization and host comparison (via the native `brisart_url`). A schemeless string is upgraded to `https://` here — that policy decision lives in `util.py`, not in the native URL parser.
+- **`split_sentences()`** — sentence splitting for synthesis; sentences outside a 30–700 character band are dropped.
+- **`safe_read_text()`** — best-effort multi-encoding read (utf-8 → utf-16 → latin-1, always succeeding via a final `errors="replace"`).
+
+---
+
+## `intent.py`
+
+Question-intent detection and intent-aware scoring. Term-overlap ranking cannot tell "does this mention the query words" from "does this mention them *for the right reason*," so a query is classified into a coarse intent — **founder, inventor, statistic, explanation, comparison, or general** — and each intent carries BOOST and PENALTY vocabularies.
+
+Intent is a **hint, not a filter**: it only nudges scores, never excludes a document. Shared by `knowledge/ranker.py`, `knowledge/synthesizer.py`, and `web/crawler.py`, so web and offline ranking can never diverge on classification. Two vocabularies here — `_KNOWN_COMPANIES` and `_GENERIC_CONCEPT_TITLES` — are intentionally finite and hand-maintained (see KI-004, KI-008 in `docs/KNOWN_ISSUES.md`).
+
+---
+
+## `blocklist.py`
+
+The single source of truth for "should this web page be kept?" Holds the blocked dictionary/definition hosts, low-value hosts, listing-path markers, account-host prefixes, and the canonical bare-function-word set. Consumed by `web/search.py`, `web/crawler.py`, and `knowledge/index.py` (to purge junk rows already stored). Requires an absolute URL with a scheme; an off-topic-wiki check only rejects a page whose title is *exactly* a bare function word unless overridden by the query's own topic terms.
+
+---
+
+## `version_info.py`
+
+Single source of truth for `APP_NAME` (`"BrisartAI"`) and `__version__`. Loads `version.py` from the project root by file path via `importlib.util` (not `import version`, since `version.py` lives outside the package and must not require the project root on `sys.path`). Falls back to `"0.0.0-unknown"` if `version.py` is missing, unreadable, or fails to import — a broken version file can never crash startup.
