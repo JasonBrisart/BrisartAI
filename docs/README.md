@@ -95,6 +95,6 @@ Each source package carries its own `README.md`; file-level docstrings own each 
 | [`SECURITY.md`](SECURITY.md) | Private vulnerability reporting, security scope, air-gapped policy |
 | [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) | Open and resolved issues (standardized bug-report format) |
 | [`CHANGELOG.md`](CHANGELOG.md) | Full release history |
-| [`brisart_ai/native/README.md`](brisart_ai/native/README.md) | The Brisart Native Stack and its verification |
+| [`native/README.md`](native/README.md) | The Brisart Native Stack and its verification |
 
 Each fact has exactly one authoritative home — this README points to it rather than duplicating it. Security details are in `SECURITY.md`; the honest limitations list is in `KNOWN_ISSUES.md`; supported file types are documented in [`brisart_ai/io/README.md`](brisart_ai/io/README.md).
