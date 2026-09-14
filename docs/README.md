@@ -98,11 +98,3 @@ Each source package carries its own `README.md`; file-level docstrings own each 
 | [`brisart_ai/native/README.md`](brisart_ai/native/README.md) | The Brisart Native Stack and its verification |
 
 Each fact has exactly one authoritative home — this README points to it rather than duplicating it. Security details are in `SECURITY.md`; the honest limitations list is in `KNOWN_ISSUES.md`; supported file types are documented in [`brisart_ai/io/README.md`](brisart_ai/io/README.md).
-
----
-
-## Licensing & author
-
-Released under the **Brisart Ecosystem License** — official releases are free for operational use; modification/forking/commercialization rights require an active subscription (see the repository's license terms for the authoritative details).
-
-Created and maintained by **Jason Brisart** as part of the Brisart research tooling ecosystem.
