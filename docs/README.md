@@ -56,7 +56,7 @@ Evidence selection & synthesis        (knowledge/synthesizer.py)
 Source-grounded desktop UI            (ui/)
 ```
 
-Full request flow, storage schema, the ranking pipeline, and a "where do I change X?" map live in **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.
+Full request flow, storage schema, the ranking pipeline, and a "where do I change X?" map live in **[`ARCHITECTURE.md`](ARCHITECTURE.md)**.
 
 BrisartAI also ships the **Brisart Native Stack** — pure-Python, from-spec reimplementations of the stdlib primitives it relies on (SHA-256, Base64, DEFLATE, URL/JSON/HTML parsing, robots.txt), each verified against the stdlib and wired into production. Details and verification: **[`brisart_ai/native/README.md`](brisart_ai/native/README.md)**.
 
