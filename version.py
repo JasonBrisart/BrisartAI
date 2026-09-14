@@ -36,4 +36,4 @@ Edge cases
   brisart_ai/version_info.py falls back to "0.0.0-unknown" rather than
   raising, so a broken version.py can never crash application startup.
 """
-__version__ = "1.0.0"
+__version__ = "1.1.0"

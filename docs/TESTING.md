@@ -23,26 +23,26 @@ brisart_ai/
 
 ## Running the tests
 
-From the project root, with no flags needed (`pytest.ini` sets `--import-mode=importlib` automatically):
+From the project root, **always with `--import-mode=importlib`** (see why below):
 
 ```bash
-pytest
+pytest --import-mode=importlib
 ```
 
 Run just one folder:
 
 ```bash
-pytest brisart_ai/native/tests/
-pytest brisart_ai/knowledge/tests/test_ranker.py
+pytest --import-mode=importlib brisart_ai/native/tests/
+pytest --import-mode=importlib brisart_ai/knowledge/tests/test_ranker.py
 ```
 
 Verbose output:
 
 ```bash
-pytest -v
+pytest -v --import-mode=importlib
 ```
 
-Individual files also work with plain `unittest` (a *direct*, non-discovery invocation has no recursive package requirement):
+Individual files also work with plain `unittest` (a *direct*, non-discovery invocation has no recursive package requirement, so the flag above isn't needed here):
 
 ```bash
 python -m unittest brisart_ai.native.tests.test_brisart_hash
@@ -50,11 +50,13 @@ python -m unittest brisart_ai.native.tests.test_brisart_hash
 
 ---
 
-## Why `pytest`, and why `--import-mode=importlib`
+## Why `pytest`, and why `--import-mode=importlib` is required every time
 
 `unittest`'s built-in recursive discovery requires every intermediate directory to have an `__init__.py` to be walked into as a package. `brisart_ai/`'s subfolders are deliberately **namespace packages with no `__init__.py`** (see `brisart_ai/version_info.py`'s docstring for why), so `unittest discover` run from the project root silently finds **zero** tests.
 
-`pytest` has no such restriction and discovers test files by path. The one wrinkle: several `tests/` subfolders share the exact same folder name across different parents (`brisart_ai/native/tests/`, `brisart_ai/web/tests/`, …). `pytest`'s *default* "prepend" import mode would resolve each to the same top-level module name and collide. `--import-mode=importlib` (configured once in `pytest.ini`) resolves each test file by its literal filesystem path instead, so identically-named `tests/` folders never collide. This is `pytest`'s own recommendation for exactly this project shape.
+`pytest` has no such restriction and discovers test files by path. The one wrinkle: several `tests/` subfolders share the exact same folder name across different parents (`brisart_ai/native/tests/`, `brisart_ai/web/tests/`, …). `pytest`'s *default* "prepend" import mode would resolve each to the same top-level module name and collide, failing collection with `import file mismatch`. `--import-mode=importlib` resolves each test file by its literal filesystem path instead, so identically-named `tests/` folders never collide. This is `pytest`'s own recommendation for exactly this project shape.
+
+There is deliberately **no `pytest.ini`, `pyproject.toml`, or `setup.cfg`** setting this automatically — the flag is passed explicitly on every invocation instead, in the command examples above and in `.github/workflows/tests.yml`. Running a bare `pytest` with no flags from the project root **will fail** on collection; always include `--import-mode=importlib`.
 
 ---
 
@@ -83,3 +85,15 @@ python scripts/debug_search_replay.py       # live provider replay
 ```
 
 See [`scripts/README.md`](../scripts/README.md) for details.
+
+---
+
+## Continuous integration
+
+`.github/workflows/tests.yml` runs on every push and pull request against `main`, and on demand from the Actions tab. Three independent jobs:
+
+- **Unit tests** — the full `pytest` suite above, matrixed across five supported CPython versions (3.9–3.13) on Linux. No GUI toolkit is installed, since the "deliberately out of scope" modules listed above are exactly the ones that would need one.
+- **Cross-platform smoke test** — the same suite, once each on Windows and macOS, to catch platform-specific path or encoding regressions.
+- **Offline ranking regression check** — `scripts/debug_offline_replay.py`, so a ranking regression is caught in CI rather than only surfacing later during manual replay.
+
+No job requires network access, a display, or any secret; each installs only `pytest` itself, and each invokes it with `--import-mode=importlib` explicitly, per the note above.

@@ -1,0 +1,128 @@
+# .github/workflows/tests.yml
+#
+# Purpose
+# -------
+# Runs BrisartAI's automated test suite (brisart_ai/*/tests/) on every
+# push and pull request, and on demand. This is the CI equivalent of a
+# contributor running `pytest` locally, per docs/TESTING.md.
+#
+# Communication / relationships
+# ------------------------------
+# - Discovers and runs every test under brisart_ai/ using `pytest` with
+#   the `--import-mode=importlib` flag passed explicitly on every
+#   invocation below, exactly as documented in docs/TESTING.md. There is
+#   deliberately no pytest.ini/pyproject.toml/setup.cfg in this repo
+#   setting that flag automatically -- brisart_ai/'s tests/ subfolders
+#   are namespace packages with no __init__.py, and pytest's default
+#   "prepend" import mode cannot tell apart the several identically
+#   named tests/ folders scattered across the tree without this flag,
+#   so it is required on every invocation, not just this workflow's.
+# - The "unit-tests" job is the primary, required check: a matrix across
+#   currently-supported CPython versions on ubuntu-latest. No GUI
+#   toolkit (Tkinter/Xvfb) is installed, because the automated suite
+#   deliberately excludes the Tk-dependent modules (ui/app.py,
+#   chat_panel.py, dialogs.py, sidebar.py) -- see docs/TESTING.md,
+#   "What's covered, and what's deliberately out of scope."
+# - The "cross-platform-smoke" job re-runs the same suite once each on
+#   windows-latest and macos-latest, on a single Python version, as a
+#   cheap sanity check that path handling and encoding stay correct
+#   across platforms without tripling the full version matrix.
+# - The "ranking-replay" job runs scripts/debug_offline_replay.py, which
+#   validates ranking *judgment* (does the expected source actually win)
+#   rather than unit correctness -- a distinct, non-network regression
+#   check called out explicitly in docs/TESTING.md.
+#
+# Settings / parameters
+# ----------------------
+# - Triggers: push and pull_request against main, plus a manual
+#   workflow_dispatch button for on-demand runs.
+# - concurrency: cancels a superseded run on the same branch/PR so pushing
+#   a quick fixup doesn't queue behind an already-stale run.
+# - PYTHONDONTWRITEBYTECODE=1 keeps runners from littering __pycache__
+#   into the checkout during the test run.
+#
+# Edge cases
+# ----------
+# - Every job is independent; a failure in one (e.g. a single Python
+#   version) does not cancel the others, so the full compatibility
+#   picture is always visible in one PR check run.
+# - No secrets, tokens, or external services are required -- every job
+#   installs only pytest itself (a test-time tool, not an application
+#   dependency; BrisartAI's runtime remains pure standard library) and
+#   runs entirely offline.
+
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  unit-tests:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Run test suite
+        run: pytest -v --import-mode=importlib
+
+  cross-platform-smoke:
+    name: Cross-platform smoke test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Run test suite
+        run: pytest -v --import-mode=importlib
+
+  ranking-replay:
+    name: Offline ranking regression check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run offline ranking replay fixtures
+        run: python scripts/debug_offline_replay.py

@@ -4,6 +4,28 @@ All notable changes to BrisartAI are documented in this file, oldest release at 
 
 ---
 
+## [1.1.0] - 2026-09-14
+
+Adds continuous integration: the automated test suite introduced in 1.0.0 now runs on every push and pull request instead of only on demand, and one real gap between that release's documentation and its actual shipped state is closed. No application, ranking, or retrieval behavior changed in this release — every change below is test-infrastructure and documentation work on top of the exact feature set shipped in 1.0.0.
+
+### Added
+
+**GitHub Actions CI workflow.** `.github/workflows/tests.yml` runs on every push and pull request against `main`, plus on demand via `workflow_dispatch`. Three independent jobs: **unit-tests** runs the full `pytest` suite across a matrix of five supported CPython versions (3.9–3.13) on Ubuntu; **cross-platform-smoke** re-runs the same suite once each on Windows and macOS on a single Python version, to catch platform-specific path-handling or encoding regressions without tripling the full version matrix; **ranking-replay** runs `scripts/debug_offline_replay.py`, so a ranking regression now fails CI directly instead of only surfacing during a manual replay. No job installs a GUI toolkit, requires network access, or needs a secret — each installs only `pytest` itself and runs entirely offline, consistent with BrisartAI's zero-runtime-dependency design. A `concurrency` group cancels a superseded run on the same branch or pull request so pushing a quick fixup doesn't queue behind an already-stale run.
+
+### Fixed
+
+**Documentation claimed a `pytest.ini` existed; it never did.** `docs/TESTING.md` and `docs/KNOWN_ISSUES.md`'s KI-R09 resolution both previously stated that `--import-mode=importlib` was "configured via `pytest.ini`," but no such file had ever actually been committed — the flag was documented as automatic when it was not. Root cause: the note was written alongside the 1.0.0 test suite as a statement of intent and never reconciled with what was actually shipped. Consequence: a bare `pytest` run from the project root failed collection outright with `import file mismatch`, because several `tests/` subfolders share the exact same folder name across different parents (`brisart_ai/native/tests/`, `brisart_ai/web/tests/`, and so on) and pytest's default "prepend" import mode cannot tell them apart without that flag. This was caught while wiring up the CI workflow above, since a workflow that simply ran `pytest` would otherwise have failed on its very first run.
+
+Rather than adding a `pytest.ini` (or `pyproject.toml`/`setup.cfg`) to carry the flag automatically, `--import-mode=importlib` is now passed **explicitly on every invocation** instead — in `.github/workflows/tests.yml` and in every command example in `docs/TESTING.md`. This avoids introducing a config file whose sole purpose is one flag, at the cost of that flag needing to be typed (or copy-pasted from the docs) by hand for any local run. `docs/TESTING.md` and `docs/KNOWN_ISSUES.md`'s KI-R09 entry are corrected accordingly.
+
+### Changed
+
+**`docs/TESTING.md`** gains a new "Continuous integration" section describing the three CI jobs above, and every documented `pytest` command now includes `--import-mode=importlib` explicitly rather than relying on a config file.
+
+**`.github/README.md`** updated to describe `workflows/tests.yml` instead of its previous "No CI workflows are defined here" line, which this release makes stale.
+
+---
+
 ## [1.0.0] - 2026-09-14
 
 Official 1.0.0 release. BrisartAI moves from the 1.0.0-beta.x line to a stable, fully-documented, fully-tested release. No ranking or retrieval behavior changed in this release — every change below is architectural, verification, or documentation work performed on top of the exact feature set shipped in 1.0.0-beta.10.
