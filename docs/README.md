@@ -1,111 +1,262 @@
 # BrisartAI
 
-**Local research intelligence. Pure Python. Local-first. Dependency-free.**
+Local-first research intelligence for offline, air-gapped, and researcher-controlled environments.
 
-BrisartAI is a desktop research assistant that turns local files, notes, code, and — when you allow it — public web material into a **searchable, source-grounded knowledge system**. It finds the evidence you already have, ranks it, and quotes it back with citations. It does not invent facts, and it does not phone home.
-
-Built for researchers, developers, archivists, and labs that want inspectable research infrastructure with **no hosted backend, no proprietary AI API, no telemetry, and no third-party package chain**. It runs on ordinary workstations and in offline / air-gapped environments.
+No cloud services. No hosted AI infrastructure. No telemetry. No vendor lock-in. Just Python.
 
 ---
 
-## At a glance
+# Why This Exists
 
-| | |
-|---|---|
-| **Run it** | `python run.py` |
-| **Interface** | Local Tkinter desktop app (GUI-only) |
-| **Storage** | Local SQLite |
-| **Runtime dependencies** | Python standard library only |
-| **Network** | Optional; fully disableable for air-gapped use |
-| **Author** | Jason Brisart — Brisart research tooling ecosystem |
+Modern AI systems are increasingly built around:
 
-## What it does
+- Cloud-hosted inference
+- Subscription services
+- Proprietary APIs
+- Closed ranking systems
+- Remote vector databases
+- Always-online operation
 
-- **Indexes local material** — notes, Markdown/text, source code, structured data, and Office/PDF documents — into a local SQLite store.
-- **Answers from evidence** — retrieves the best passages and quotes them back with sources. When the evidence is thin, it says so.
-- **Searches the public web (optional)** — only when you enable it; otherwise everything works locally with zero outbound requests.
-- **Ranks with the Brisart Relevance Engine** — a custom, inspectable, non-TF-IDF/BM25 pipeline that ranks a source because it's likely to *answer the question*, not just repeat its words.
+BrisartAI explores a different approach.
 
----
+The goal is simple:
 
-## Quick start
+If knowledge matters, you should be able to build, search, organize, rank, and verify that knowledge yourself.
 
-Requires a Python 3 install with Tkinter and write access in the working folder. No third-party packages needed.
+BrisartAI is a local research intelligence platform designed around transparency, auditability, and long-term ownership.
 
-```bash
-python run.py        # or, on Windows: py run.py  /  start.bat
-```
-
-`run.py` opens the desktop app. Any startup failure (locked index, read-only folder) is caught and shown as a dialog, not a raw traceback.
-
-Then: add local material through the interface, let it index, and ask a question. Enable public web research only when appropriate for your environment. For air-gapped use, leave web research off and index only approved local material.
+Everything stays under your control.
 
 ---
 
-## How it works
+# Design Principles
+
+## Local First
+
+Research belongs to the researcher.
+
+Knowledge remains stored locally under your control.
+
+## Offline Capable
+
+BrisartAI continues functioning without internet access.
+
+Public web research is optional, never required.
+
+## Source Grounded
+
+Every answer should be backed by identifiable evidence.
+
+The system retrieves information from indexed sources and returns citations.
+
+## Human Understandable
+
+Ranking systems should be inspectable.
+
+Research workflows should be understandable.
+
+Stored information should remain accessible years later.
+
+## Pure Python
+
+BrisartAI is built entirely with Python's standard library.
+
+No runtime dependencies.
+
+No package managers.
+
+No external frameworks.
+
+## Long-Term Maintainability
+
+The project prioritizes architecture that remains understandable over time.
+
+Features are separated into clearly defined modules with explicit responsibilities.
+
+---
+
+# What BrisartAI Is
+
+BrisartAI is a retrieval-and-research platform.
+
+It is not a hosted AI service.
+
+It is not a cloud application.
+
+It is not a neural model.
+
+Instead, it:
+
+- Imports research material
+- Indexes knowledge locally
+- Ranks information
+- Retrieves evidence
+- Synthesizes source-grounded answers
+- Preserves research context
+
+The result is a research assistant built around evidence rather than prediction.
+
+---
+
+# Core Capabilities
+
+| Capability | Purpose |
+|------------|----------|
+| Local Knowledge Index | Search imported research material |
+| Research Notes | Store and retrieve researcher-created notes |
+| Web Research | Optionally ingest public web information |
+| Source-Grounded Answers | Return evidence with citations |
+| Brisart Relevance Engine | Custom ranking system |
+| Knowledge Vault | Organize research resources |
+| Native Stack | Pure-Python foundational technology |
+
+---
+
+# The Brisart Relevance Engine
+
+BrisartAI does not use TF-IDF.
+
+BrisartAI does not use BM25.
+
+Instead it uses the Brisart Relevance Engine.
+
+The engine evaluates:
+
+- Term rarity
+- Term presence
+- Document shape
+- Query coverage
+- Intent classification
+- Phrase matching
+- Title relevance
+- Term proximity
+
+The objective is not simply to find matching words.
+
+The objective is to find information that actually answers the question.
+
+---
+
+# The Brisart Native Stack
+
+BrisartAI includes a collection of from-spec, pure-Python implementations of foundational technologies.
+
+These include:
+
+| Module | Purpose |
+|----------|----------|
+| BrisartHash | SHA-256 |
+| BrisartCodec | Base64 |
+| BrisartInflate | DEFLATE / zlib |
+| BrisartURL | URL processing |
+| BrisartJSON | JSON processing |
+| BrisartMarkup | HTML processing |
+| BrisartRobots | robots.txt processing |
+
+Each implementation is independently verified against the equivalent Python standard library behavior.
+
+---
+
+# Architectural Overview
 
 ```text
-Local files + (optional) web pages
-        │  extract & clean            (io/)
-        ▼
-Local SQLite index                    (knowledge/index.py)
-        │  Brisart Relevance Engine   (knowledge/relevance_engine.py + ranker.py + intent.py)
-        ▼
-Evidence selection & synthesis        (knowledge/synthesizer.py)
-        ▼
-Source-grounded desktop UI            (ui/)
+BrisartAI
+│
+├── core/
+├── io/
+├── knowledge/
+├── native/
+├── ui/
+├── web/
+│
+├── blocklist.py
+├── intent.py
+├── util.py
+└── version_info.py
 ```
 
-Full request flow, storage schema, the ranking pipeline, and a "where do I change X?" map live in **[`ARCHITECTURE.md`](ARCHITECTURE.md)**.
+## core/
 
-BrisartAI also ships the **Brisart Native Stack** — pure-Python, from-spec reimplementations of the stdlib primitives it relies on (SHA-256, Base64, DEFLATE, URL/JSON/HTML parsing, robots.txt), each verified against the stdlib and wired into production. Details and verification live in `brisart_ai/native/README.md`, alongside that package's source.
+Conversation routing, settings, and session memory.
 
----
+## io/
 
-## Repository layout
+File ingestion and text extraction.
 
-```text
-BrisartAI/
-├── brisart_ai/
-│   ├── core/        Conversation routing, session memory, settings
-│   ├── io/          Readers, extraction, input cleaning
-│   ├── knowledge/   Indexing, ranking, relevance, synthesis, vault
-│   ├── native/      The Brisart Native Stack
-│   ├── ui/          Tkinter interface + service boundary
-│   ├── web/         Optional public web research
-│   ├── blocklist.py / intent.py / util.py / version_info.py   Shared layer
-│   └── tests/       Tests for the shared modules (each package has its own tests/)
-├── data/            Local configuration (research_settings.json)
-├── docs/            Durable project documentation (see below)
-├── scripts/         Diagnostic ranking-replay utilities
-├── run.py           Application launcher
-└── version.py       Canonical release version
-```
+## knowledge/
 
-Each source package carries its own `README.md` beside its code; file-level docstrings own each module's contract, parameters, relationships, and edge cases.
+Indexing, ranking, retrieval, synthesis, and vault systems.
+
+## native/
+
+The Brisart Native Stack.
+
+## ui/
+
+Desktop application layer.
+
+## web/
+
+Optional public web research subsystem.
 
 ---
 
-## Documentation
+# Desktop Application
 
-Everything below lives in the `docs/` folder and cross-links freely within it:
+BrisartAI uses a modular Tkinter desktop architecture.
 
-| Document | Owns |
-|---|---|
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | System design, request flow, storage model, "where do I change X?" |
-| [`TESTING.md`](TESTING.md) | Test layout, commands, scope |
-| [`SECURITY.md`](SECURITY.md) | Private vulnerability reporting, security scope, air-gapped policy |
-| [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) | Open and resolved issues (standardized bug-report format) |
-| [`CHANGELOG.md`](CHANGELOG.md) | Full release history |
+The interface remains separate from indexing, storage, ranking, and retrieval logic.
 
-Package-level documentation lives beside its own code rather than in `docs/`, so it isn't linked from here — see `README.md` inside each `brisart_ai/` subfolder (for example `brisart_ai/native/README.md` for the Native Stack, or `brisart_ai/io/README.md` for supported file types).
+The UI is a presentation layer.
 
-Each fact has exactly one authoritative home. Security details are in `SECURITY.md`; the honest limitations list is in `KNOWN_ISSUES.md`.
+Knowledge systems remain independent.
 
 ---
 
-## Licensing & author
+# Testing
 
-Released under the **Brisart Ecosystem License** — official releases are free for operational use; modification/forking/commercialization rights require an active subscription (see the repository's license terms for the authoritative details).
+BrisartAI includes a repository-wide automated test suite.
 
-Created and maintained by **Jason Brisart** as part of the Brisart research tooling ecosystem.
+Tests are colocated beside source code.
+
+Coverage includes:
+
+- Native modules
+- Indexing
+- Ranking
+- Intent classification
+- Knowledge vault systems
+- Web logic
+- Service layer behavior
+
+Ranking quality is additionally validated using replay fixtures and regression datasets.
+
+---
+
+# Documentation
+
+Core documentation:
+
+- ARCHITECTURE.md
+- TESTING.md
+- SECURITY.md
+- KNOWN_ISSUES.md
+- CHANGELOG.md
+
+Package-level documentation exists beside the source it describes.
+
+---
+
+# Licensing
+
+BrisartAI is part of the Brisart ecosystem.
+
+See LICENSE.md for licensing information.
+
+---
+
+# Author
+
+Jason Brisart
+
+Research tooling for local-first and air-gapped research environments.
