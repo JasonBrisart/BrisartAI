@@ -3,37 +3,22 @@ File: brisart_ai/ui/dialogs.py
 
 Purpose
 -------
-The small modal prompts ui/app.py's sidebar actions need: a file/folder
-picker, a generic text prompt, a two-step title/body prompt for notes,
-and SettingsDialog, a checkbox per toggle in core/settings.py's
-TOGGLE_LABELS.
+The small modal prompts ui/app.py's sidebar actions need.
 
 Communication / relationships
 ------------------------------
 - brisart_ai/ui/app.py: calls ask_import_path(), ask_text(), ask_note(),
-  and constructs SettingsDialog(self, self.service, on_change=...).
-- brisart_ai/core/settings.py: SettingsDialog reads TOGGLE_LABELS to
-  render one checkbox per toggle and reads/writes directly against the
-  live BrisartService.settings instance.
-- Imports brisart_ai.ui.theme for SettingsDialog's colors/fonts.
+  constructs SettingsDialog.
+- brisart_ai/core/settings.py: SettingsDialog reads TOGGLE_LABELS.
 
 Settings / parameters
 ----------------------
-- ask_import_path(): folder picker first, falls back to a single-file
-  picker if the folder picker is cancelled.
-- ask_note(): two sequential prompts (title, then body); short-circuits
-  to ("", "") if either step is cancelled or the body ends up empty.
-- SettingsDialog(master, service, on_change=None): on_change is called
-  after every toggle so the caller (the sidebar's status line) can
-  refresh immediately -- there is no separate "Apply" step.
+- ask_import_path(): folder picker, falls back to file picker.
+- SettingsDialog(master, service, on_change=None).
 
 Edge cases
 ----------
-- ask_text()/ask_note() return "" (not None) on cancel, so callers can
-  use a plain `if not result:` check without a None check.
-- SettingsDialog._toggle() writes directly to
-  self.service.settings.set(key, ...), so a toggle is persisted to disk
-  immediately, not just held in the dialog's own state.
+- ask_text()/ask_note() return "" (not None) on cancel.
 """
 from __future__ import annotations
 
@@ -80,30 +65,17 @@ class SettingsDialog(tk.Toplevel):
         self._build()
 
     def _build(self) -> None:
-        heading = tk.Label(
-            self,
-            text="Research Sources",
-            bg=theme.BG_PANEL,
-            fg=theme.FG_ACCENT,
-            font=theme.FONT_HEADING,
-        )
+        heading = tk.Label(self, text="Research Sources", bg=theme.BG_PANEL, fg=theme.FG_ACCENT, font=theme.FONT_HEADING)
         heading.pack(anchor="w", padx=theme.PAD, pady=(theme.PAD, theme.PAD_SMALL))
 
         for key, label in TOGGLE_LABELS.items():
             var = tk.BooleanVar(value=self.service.settings.get(key))
             self.vars[key] = var
             chk = tk.Checkbutton(
-                self,
-                text=label,
-                variable=var,
-                command=lambda k=key: self._toggle(k),
-                bg=theme.BG_PANEL,
-                fg=theme.FG_TEXT,
-                selectcolor=theme.BG_INPUT,
-                activebackground=theme.BG_PANEL,
-                activeforeground=theme.FG_ACCENT,
-                font=theme.FONT_UI,
-                anchor="w",
+                self, text=label, variable=var, command=lambda k=key: self._toggle(k),
+                bg=theme.BG_PANEL, fg=theme.FG_TEXT, selectcolor=theme.BG_INPUT,
+                activebackground=theme.BG_PANEL, activeforeground=theme.FG_ACCENT,
+                font=theme.FONT_UI, anchor="w",
             )
             chk.pack(fill="x", padx=theme.PAD, pady=2)
 
@@ -114,22 +86,13 @@ class SettingsDialog(tk.Toplevel):
                 "answered today. Imported files and saved notes are\n"
                 "always part of your local knowledge base."
             ),
-            bg=theme.BG_PANEL,
-            fg=theme.FG_MUTED,
-            font=("Segoe UI", 8),
-            justify="left",
+            bg=theme.BG_PANEL, fg=theme.FG_MUTED, font=("Segoe UI", 8), justify="left",
         )
         note.pack(anchor="w", padx=theme.PAD, pady=(theme.PAD, theme.PAD))
 
         close_btn = tk.Button(
-            self,
-            text="Close",
-            command=self.destroy,
-            bg=theme.FG_ACCENT_DIM,
-            fg="#0b0d10",
-            relief="flat",
-            font=theme.FONT_UI_BOLD,
-            padx=14,
+            self, text="Close", command=self.destroy, bg=theme.FG_ACCENT_DIM,
+            fg="#0b0d10", relief="flat", font=theme.FONT_UI_BOLD, padx=14,
         )
         close_btn.pack(pady=(0, theme.PAD))
 

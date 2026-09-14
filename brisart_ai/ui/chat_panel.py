@@ -4,33 +4,21 @@ File: brisart_ai/ui/chat_panel.py
 Purpose
 -------
 The scrollable transcript plus single-line input box that makes up the
-center of the BrisartAI window. Calls on_submit(text) with the stripped
-input whenever the user hits Enter or clicks Send.
+center of the BrisartAI window.
 
 Communication / relationships
 ------------------------------
-- brisart_ai/ui/app.py: constructs ChatPanel(body, on_submit=self.
-  _on_chat_submit) and calls .append_user()/.append_assistant()/
-  .append_system() to render the conversation.
+- brisart_ai/ui/app.py: constructs ChatPanel and calls append_*().
 - Imports brisart_ai.ui.theme for every color/font constant used.
 
 Settings / parameters
 ----------------------
-- on_submit: callback invoked with the stripped, non-empty input text on
-  Enter or Send-button click.
-- append(text, tag): the shared rendering primitive; append_user()/
-  append_assistant()/append_system() are thin wrappers selecting the
-  "user"/"assistant"/"system" tag so each role renders in its own color
-  from theme.py.
+- on_submit: callback invoked with stripped, non-empty input text.
 
 Edge cases
 ----------
-- The transcript is read-only (state="disabled" outside of append())
-  so the user can select/copy text but not edit history.
-- _submit() ignores an empty/whitespace-only input rather than calling
-  on_submit() with nothing.
-- append() auto-scrolls to the bottom after every message and inserts a
-  blank line separator before all but the very first message.
+- The transcript is read-only outside of append().
+- append() auto-scrolls to the bottom after every message.
 """
 from __future__ import annotations
 
@@ -50,56 +38,32 @@ class ChatPanel(ttk.Frame):
 
     def _build(self) -> None:
         self.transcript = scrolledtext.ScrolledText(
-            self,
-            wrap="word",
-            bg=theme.BG_CHAT,
-            fg=theme.FG_TEXT,
-            insertbackground=theme.FG_TEXT,
-            font=theme.FONT_MONO,
-            borderwidth=0,
-            highlightthickness=0,
-            padx=theme.PAD,
-            pady=theme.PAD,
+            self, wrap="word", bg=theme.BG_CHAT, fg=theme.FG_TEXT,
+            insertbackground=theme.FG_TEXT, font=theme.FONT_MONO,
+            borderwidth=0, highlightthickness=0, padx=theme.PAD, pady=theme.PAD,
             state="disabled",
         )
         self.transcript.pack(side="top", fill="both", expand=True)
-
-        self.transcript.tag_configure(
-            "user", foreground=theme.FG_USER, font=theme.FONT_MONO_BOLD
-        )
+        self.transcript.tag_configure("user", foreground=theme.FG_USER, font=theme.FONT_MONO_BOLD)
         self.transcript.tag_configure("assistant", foreground=theme.FG_ASSISTANT)
-        self.transcript.tag_configure(
-            "system", foreground=theme.FG_SYSTEM, font=("Consolas", 9, "italic")
-        )
+        self.transcript.tag_configure("system", foreground=theme.FG_SYSTEM, font=("Consolas", 9, "italic"))
 
         input_row = ttk.Frame(self, style="Panel.TFrame")
         input_row.pack(side="bottom", fill="x", pady=(theme.PAD_SMALL, 0))
 
         self.input_var = tk.StringVar()
         self.entry = tk.Entry(
-            input_row,
-            textvariable=self.input_var,
-            bg=theme.BG_INPUT,
-            fg=theme.FG_TEXT,
-            insertbackground=theme.FG_TEXT,
-            font=theme.FONT_UI,
+            input_row, textvariable=self.input_var, bg=theme.BG_INPUT,
+            fg=theme.FG_TEXT, insertbackground=theme.FG_TEXT, font=theme.FONT_UI,
             relief="flat",
         )
-        self.entry.pack(
-            side="left", fill="x", expand=True, ipady=6, padx=(0, theme.PAD_SMALL)
-        )
+        self.entry.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, theme.PAD_SMALL))
         self.entry.bind("<Return>", self._submit)
 
         send_btn = tk.Button(
-            input_row,
-            text="Send",
-            command=self._submit,
-            bg=theme.FG_ACCENT_DIM,
-            fg="#0b0d10",
-            activebackground=theme.FG_ACCENT,
-            relief="flat",
-            font=theme.FONT_UI_BOLD,
-            padx=14,
+            input_row, text="Send", command=self._submit, bg=theme.FG_ACCENT_DIM,
+            fg="#0b0d10", activebackground=theme.FG_ACCENT, relief="flat",
+            font=theme.FONT_UI_BOLD, padx=14,
         )
         send_btn.pack(side="right")
 

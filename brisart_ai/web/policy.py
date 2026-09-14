@@ -4,54 +4,40 @@ File: brisart_ai/web/policy.py
 Purpose
 -------
 Internet-access safety policy: refuse local/private network destinations
-outright, and honor robots.txt for every public host BrisartAI crawls
-(cached per site so a host is never re-fetched twice in one run).
+outright, and honor robots.txt for every public host BrisartAI crawls.
 
 Communication / relationships
 ------------------------------
-- brisart_ai/web/crawler.py: builds one RobotsCache() per crawl and
-  calls .allowed(url) before every fetch.
-- brisart_ai/web/fetcher.py and brisart_ai/web/search.py: both import
-  USER_AGENT from here, so every outbound request in the whole codebase
-  carries the same, version-stamped identifier.
-- Imports brisart_ai.version_info.__version__ to build USER_AGENT.
+- brisart_ai/web/crawler.py: builds one RobotsCache() per crawl.
+- brisart_ai/web/fetcher.py, brisart_ai/web/search.py: import USER_AGENT.
+- Imports brisart_ai.version_info.__version__.
+- Imports brisart_ai.native.brisart_url.brisart_urlsplit (replacing
+  urllib.parse.urlsplit/urlunsplit) and brisart_ai.native.brisart_robots.
+  BrisartRobotsPolicy (replacing urllib.robotparser.RobotFileParser) --
+  see brisart_ai/native/README.md for verification. Actual HTTP requests
+  (urllib.request/urllib.error) are unchanged.
 
 Settings / parameters
 ----------------------
-- USER_AGENT: "BrisartAI/{__version__} (local-first research assistant;
-  respectful public-web crawler)" -- version-stamped via version_info.py.
-- ROBOTS_TIMEOUT (8 seconds) / MAX_ROBOTS_BYTES (512,000): bound how
-  long and how much of a robots.txt fetch is allowed to take.
+- USER_AGENT: version-stamped via version_info.py.
+- ROBOTS_TIMEOUT (8s) / MAX_ROBOTS_BYTES (512,000).
 
 Edge cases
 ----------
-- The important design decision: if robots.txt is missing, unreachable,
-  too large, malformed, or returns 401/403 (read as "we can't tell what
-  the policy is," not "this request is denied"), crawling is ALLOWED,
-  not blocked. A retrieval failure must never be read as an explicit
-  site-wide denial -- otherwise one flaky DNS hiccup would silently
-  block an entire domain for the rest of the run. The only path that can
-  genuinely deny a URL is a robots.txt that was successfully fetched,
-  parsed, and explicitly disallows this user agent for that specific
-  path.
-- is_local_or_private_host() recognizes localhost and its variants,
-  .local/.localhost suffixed hosts, and any IP address ipaddress
-  classifies as private/loopback/link-local/multicast/reserved/
-  unspecified -- this check runs before any network access at all.
-- RobotsCache caches a None value (meaning "no parser, allow") just as
-  readily as a real parsed RobotFileParser, so a site whose robots.txt
-  failed once is not re-fetched again within the same run.
+- Missing/unreachable/malformed robots.txt -> ALLOWED, not blocked.
+- is_local_or_private_host() runs before any network access.
+- BrisartRobotsPolicy mirrors urllib.robotparser's simpler algorithm.
 """
 from __future__ import annotations
 
 import ipaddress
 import threading
 import urllib.error
-import urllib.parse
 import urllib.request
-import urllib.robotparser
 from typing import Dict, Optional
 
+from brisart_ai.native.brisart_robots import BrisartRobotsPolicy
+from brisart_ai.native.brisart_url import brisart_urlsplit, brisart_urlunsplit
 from brisart_ai.version_info import __version__
 
 USER_AGENT = (
@@ -76,16 +62,10 @@ def is_local_or_private_host(hostname: str) -> bool:
         address = ipaddress.ip_address(host)
     except ValueError:
         return False
-    return any(
-        (
-            address.is_private,
-            address.is_loopback,
-            address.is_link_local,
-            address.is_multicast,
-            address.is_reserved,
-            address.is_unspecified,
-        )
-    )
+    return any((
+        address.is_private, address.is_loopback, address.is_link_local,
+        address.is_multicast, address.is_reserved, address.is_unspecified,
+    ))
 
 
 def is_localhost(hostname: str) -> bool:
@@ -94,24 +74,19 @@ def is_localhost(hostname: str) -> bool:
 
 
 class RobotsCache:
-    """Fetch and cache robots.txt rules.
-
-    Local/private destinations are always rejected. If a public site's
-    robots.txt explicitly rejects the BrisartAI user agent, the URL is
-    rejected. Anything else (missing, unreachable, malformed, or an
-    ordinary error response) allows crawling -- see the module docstring
-    for why a retrieval failure must never read as a denial.
-    """
+    """Fetch and cache robots.txt rules."""
 
     def __init__(self) -> None:
-        self._cache: Dict[str, Optional[urllib.robotparser.RobotFileParser]] = {}
+        self._cache: Dict[str, Optional[BrisartRobotsPolicy]] = {}
         self._lock = threading.Lock()
 
     def _site_root(self, url: str) -> str:
-        parsed = urllib.parse.urlsplit(url)
-        return urllib.parse.urlunsplit((parsed.scheme.casefold(), parsed.netloc, "", "", ""))
+        parsed = brisart_urlsplit(url)
+        return brisart_urlunsplit(
+            type(parsed)(parsed.scheme.casefold(), parsed.netloc, "", "", "")
+        )
 
-    def _fetch_parser(self, site_root: str) -> Optional[urllib.robotparser.RobotFileParser]:
+    def _fetch_parser(self, site_root: str) -> Optional[BrisartRobotsPolicy]:
         robots_url = site_root.rstrip("/") + "/robots.txt"
         request = urllib.request.Request(
             robots_url,
@@ -132,15 +107,9 @@ class RobotsCache:
                 text = raw.decode(charset, errors="replace")
         except urllib.error.HTTPError as exc:
             if exc.code in {401, 403}:
-                print(
-                    f"WARN: robots.txt returned HTTP {exc.code}; "
-                    f"treating it as unavailable: {robots_url}"
-                )
+                print(f"WARN: robots.txt returned HTTP {exc.code}; treating it as unavailable: {robots_url}")
             elif exc.code not in {404, 410}:
-                print(
-                    f"WARN: robots.txt returned HTTP {exc.code}; "
-                    f"allowing fetch: {robots_url}"
-                )
+                print(f"WARN: robots.txt returned HTTP {exc.code}; allowing fetch: {robots_url}")
             return None
         except urllib.error.URLError as exc:
             print(f"WARN: robots.txt unavailable, allowing fetch: {robots_url} ({exc.reason})")
@@ -149,8 +118,7 @@ class RobotsCache:
             print(f"WARN: robots.txt check failed, allowing fetch: {robots_url} ({exc})")
             return None
 
-        parser = urllib.robotparser.RobotFileParser()
-        parser.set_url(robots_url)
+        parser = BrisartRobotsPolicy()
         try:
             parser.parse(text.splitlines())
         except Exception as exc:
@@ -161,13 +129,11 @@ class RobotsCache:
     def allowed(self, url: str) -> bool:
         """Return whether BrisartAI may fetch a public URL."""
         try:
-            parsed = urllib.parse.urlsplit(str(url or "").strip())
+            parsed = brisart_urlsplit(str(url or "").strip())
         except ValueError:
             return False
-
         if parsed.scheme.casefold() not in {"http", "https"}:
             return False
-
         hostname = parsed.hostname or ""
         if is_local_or_private_host(hostname):
             print(f"SKIP local/private destination: {url}")
@@ -181,7 +147,6 @@ class RobotsCache:
 
         if parser is None:
             return True
-
         try:
             return bool(parser.can_fetch(USER_AGENT, url))
         except Exception as exc:
@@ -189,11 +154,4 @@ class RobotsCache:
             return True
 
 
-__all__ = [
-    "MAX_ROBOTS_BYTES",
-    "ROBOTS_TIMEOUT",
-    "RobotsCache",
-    "USER_AGENT",
-    "is_local_or_private_host",
-    "is_localhost",
-]
+__all__ = ["MAX_ROBOTS_BYTES", "ROBOTS_TIMEOUT", "RobotsCache", "USER_AGENT", "is_local_or_private_host", "is_localhost"]

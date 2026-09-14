@@ -3,40 +3,25 @@ File: brisart_ai/core/session_memory.py
 
 Purpose
 -------
-A tiny SQLite-backed rolling log of recent chat topics -- not full
-answers, just compressed keywords -- so core/conversation.py can hand
-knowledge/synthesizer.py a bit of "what has this chat been about"
-context. Shares its SQLite file with knowledge/index.py's Index but
-owns a separate conversation_memory table.
+A tiny SQLite-backed rolling log of recent chat topics.
 
 Communication / relationships
 ------------------------------
-- brisart_ai/core/conversation.py: calls .recent_topics() before
-  answering and .add() after, for both the user's question and the
-  assistant's answer.
-- brisart_ai/ui/service.py: constructs the single SessionMemory instance
-  for the app's lifetime, sharing db_path with the main Index.
+- brisart_ai/core/conversation.py: recent_topics() / add().
+- brisart_ai/ui/service.py: constructs the single SessionMemory instance.
 - Imports brisart_ai.io.input_cleaner.normalize_shellish_input() and
   brisart_ai.util.now_ts()/tokenize().
 
 Settings / parameters
 ----------------------
-- check_same_thread=False: required because web research runs on a
-  background thread (ui/app.py) while this connection is created on the
-  main thread; the app already serializes requests via
-  BrisartApp._busy, so no extra locking was needed.
-- _compress(): tokenizes content and caps it at 12 terms, falling back
-  to the first 140 raw characters only if tokenization finds nothing
-  (e.g. an all-stopword or all-punctuation message).
-- recent_topics(limit=6): returns the most-recent, de-duplicated topics
-  newest-first, each clipped to 120 characters for display.
+- check_same_thread=False.
+- _compress(): tokenizes, caps at 12 terms, falls back to 140 chars.
+- recent_topics(limit=6).
 
 Edge cases
 ----------
-- add() silently drops a row that compresses to nothing (e.g. an
-  all-whitespace message) rather than storing an empty topic.
-- Stored content is also hard-capped at 400 characters at the SQL layer
-  as a second safety net beyond the 12-term/140-character compression.
+- add() drops rows that compress to nothing.
+- Content capped at 400 chars at the SQL layer.
 """
 from __future__ import annotations
 
@@ -79,22 +64,13 @@ class SessionMemory:
             return
         with self.conn:
             self.conn.execute(
-                """
-                INSERT INTO conversation_memory(role, content, created_at)
-                VALUES(?,?,?)
-                """,
+                "INSERT INTO conversation_memory(role, content, created_at) VALUES(?,?,?)",
                 (role, compact[:400], now_ts()),
             )
 
     def recent_topics(self, limit: int = 6) -> List[str]:
-        """Most-recent, de-duplicated topics, newest first."""
         rows = self.conn.execute(
-            """
-            SELECT content
-            FROM conversation_memory
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
+            "SELECT content FROM conversation_memory ORDER BY created_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
         topics = []

@@ -3,33 +3,23 @@ File: brisart_ai/ui/sidebar.py
 
 Purpose
 -------
-The left-hand nav: app name/version header, the five core action
-buttons (Import Files, Add Note, Research Web, Settings, Help), and a
-status line pinned to the bottom showing indexed source counts.
+The left-hand nav: app name/version header, five core action buttons,
+and a status line showing indexed source counts.
 
 Communication / relationships
 ------------------------------
-- brisart_ai/ui/app.py: builds one Sidebar(master, actions) with a dict
-  mapping each button's key to its handler, and calls set_status(total,
-  files, web) after every answer/import/note action.
-- Imports brisart_ai.ui.theme for colors/fonts/spacing and
-  brisart_ai.version_info for APP_NAME/__version__.
+- brisart_ai/ui/app.py: builds one Sidebar with an actions dict.
+- Imports brisart_ai.ui.theme and brisart_ai.version_info.
 
 Settings / parameters
 ----------------------
-- actions: dict mapping button key ("import"/"note"/"research"/
-  "settings"/"help") to its zero-argument handler.
-- theme.SIDEBAR_WIDTH: fixed pixel width, enforced via
-  pack_propagate(False) so long button labels never resize the sidebar.
+- actions: dict mapping button key to handler.
+- theme.SIDEBAR_WIDTH.
 
 Edge cases
 ----------
-- set_status() only displays numbers it is handed -- this widget does
-  not count anything itself; the caller is responsible for supplying
-  fresh counts.
-- Each button's key is bound as a default argument (k=key) in its
-  command lambda, so every button invokes its own action rather than
-  whichever key the construction loop last landed on.
+- set_status() only displays numbers it is handed.
+- Each button's key is bound as a default argument in its command lambda.
 """
 from __future__ import annotations
 
@@ -48,74 +38,36 @@ class Sidebar(ttk.Frame):
         self._build()
 
     def _build(self) -> None:
-        title = tk.Label(
-            self,
-            text=APP_NAME,
-            bg=theme.BG_SIDEBAR,
-            fg=theme.FG_ACCENT,
-            font=("Segoe UI", 16, "bold"),
-        )
+        title = tk.Label(self, text=APP_NAME, bg=theme.BG_SIDEBAR, fg=theme.FG_ACCENT, font=("Segoe UI", 16, "bold"))
         title.pack(anchor="w", padx=theme.PAD, pady=(theme.PAD, 0))
 
-        version = tk.Label(
-            self,
-            text=__version__,
-            bg=theme.BG_SIDEBAR,
-            fg=theme.FG_MUTED,
-            font=("Segoe UI", 9),
-        )
+        version = tk.Label(self, text=__version__, bg=theme.BG_SIDEBAR, fg=theme.FG_MUTED, font=("Segoe UI", 9))
         version.pack(anchor="w", padx=theme.PAD, pady=(0, theme.PAD))
 
-        ttk.Separator(self, orient="horizontal").pack(
-            fill="x", padx=theme.PAD, pady=theme.PAD_SMALL
-        )
+        ttk.Separator(self, orient="horizontal").pack(fill="x", padx=theme.PAD, pady=theme.PAD_SMALL)
 
-        core_label = tk.Label(
-            self,
-            text="CORE ACTIONS",
-            bg=theme.BG_SIDEBAR,
-            fg=theme.FG_MUTED,
-            font=("Segoe UI", 8, "bold"),
-        )
+        core_label = tk.Label(self, text="CORE ACTIONS", bg=theme.BG_SIDEBAR, fg=theme.FG_MUTED, font=("Segoe UI", 8, "bold"))
         core_label.pack(anchor="w", padx=theme.PAD, pady=(theme.PAD_SMALL, theme.PAD_SMALL))
 
         for label, key in (
-            ("Import Files", "import"),
-            ("Add Note", "note"),
-            ("Research Web", "research"),
-            ("Settings", "settings"),
-            ("Help", "help"),
+            ("Import Files", "import"), ("Add Note", "note"),
+            ("Research Web", "research"), ("Settings", "settings"), ("Help", "help"),
         ):
             self._make_button(label, key)
 
         self.status_var = tk.StringVar(value="Indexed: 0 (0 local, 0 web)")
         status = tk.Label(
-            self,
-            textvariable=self.status_var,
-            bg=theme.BG_SIDEBAR,
-            fg=theme.FG_MUTED,
-            font=("Segoe UI", 8),
-            wraplength=theme.SIDEBAR_WIDTH - 2 * theme.PAD,
-            justify="left",
+            self, textvariable=self.status_var, bg=theme.BG_SIDEBAR, fg=theme.FG_MUTED,
+            font=("Segoe UI", 8), wraplength=theme.SIDEBAR_WIDTH - 2 * theme.PAD, justify="left",
         )
         status.pack(side="bottom", anchor="w", padx=theme.PAD, pady=theme.PAD)
 
     def _make_button(self, label: str, key: str, small: bool = False) -> None:
-        # key is bound as a default arg (k=key) so every button invokes
-        # its OWN action, not whichever key the for-loop last landed on.
         btn = tk.Button(
-            self,
-            text=label,
-            anchor="w",
-            command=lambda k=key: self.actions[k](),
-            bg=theme.BG_SIDEBAR,
-            fg=theme.FG_TEXT,
-            activebackground=theme.BG_PANEL,
-            activeforeground=theme.FG_ACCENT,
-            relief="flat",
-            font=theme.FONT_UI if not small else ("Segoe UI", 9),
-            padx=theme.PAD,
-            pady=4,
+            self, text=label, anchor="w", command=lambda k=key: self.actions[k](),
+            bg=theme.BG_SIDEBAR, fg=theme.FG_TEXT, activebackground=theme.BG_PANEL,
+            activeforeground=theme.FG_ACCENT, relief="flat",
+            font=theme.FONT_UI if not small else ("Segoe UI", 9), padx=theme.PAD, pady=4,
         )
         btn.pack(fill="x", padx=theme.PAD_SMALL, pady=1)
 

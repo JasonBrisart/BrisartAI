@@ -5,41 +5,24 @@ File: scripts/debug_offline_replay.py
 Purpose
 -------
 Offline retrieval replay: ranks imported-document chunks with no
-network involved. scripts/debug_search_replay.py covers public web
-search, which means every run depends on whatever DuckDuckGo and Bing
-feel like returning that minute -- providers under rate-limiting return
-well-formed HTML for an unrelated query, so "who invented the
-transistor" came back as airline booking pages, making a real ranking
-bug hard to see. This script removes the network entirely: it builds a
-temporary SQLite index from in-file text fixtures, runs the real
-brisart_ai.knowledge.ranker.search(), and prints the intent, score and
-reason for every candidate.
+network involved, using controlled in-file text fixtures against the
+real brisart_ai.knowledge.ranker.search() path.
 
 Communication / relationships
 ------------------------------
 - Imports brisart_ai.intent.{describe_intent, detect_intent},
   brisart_ai.knowledge.index.Index, brisart_ai.knowledge.ranker.search.
-- Standalone script, not imported by any other module; run directly
-  via `python3 scripts/debug_offline_replay.py`.
+- Standalone script; run directly via `python3 scripts/debug_offline_replay.py`.
 
 Settings / parameters
 ----------------------
-- FIXTURES: each entry is (name, query, expected_top_title, chunks)
-  where chunks are (title, text) pairs standing in for imported
-  .txt/.md/.pdf content.
-- Usage: `python3 scripts/debug_offline_replay.py` (all fixtures),
-  `... microsoft` (one fixture by name), `... --list` (list fixture
-  names/queries without running them).
+- FIXTURES: (name, query, expected_top_title, chunks) tuples.
+- Usage: no args (all fixtures), a fixture name, or --list.
 
 Edge cases
 ----------
-- The fixture database goes in a temp directory (tempfile.mkdtemp())
-  and is deleted on exit (shutil.rmtree(..., ignore_errors=True)) --
-  fixtures are throwaway; no production data is touched and nothing is
-  written to the repository.
-- Exit status is non-zero when a fixture's expected top chunk does not
-  win, so this doubles as a regression check for the intent ranking
-  when run in CI or by hand before a release.
+- Fixture database lives in a temp dir, deleted on exit.
+- Exit status is non-zero when a fixture's expected top chunk doesn't win.
 """
 from __future__ import annotations
 
@@ -49,143 +32,76 @@ import sys
 import tempfile
 from typing import Dict, List, Sequence, Tuple
 
-sys.path.insert(
-    0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from brisart_ai.intent import describe_intent, detect_intent  # noqa: E402
 from brisart_ai.knowledge.index import Index  # noqa: E402
 from brisart_ai.knowledge.ranker import search  # noqa: E402
 
-# Each fixture is (name, query, expected_top_title, chunks) where chunks
-# are (title, text). Text is deliberately plain prose: these stand in for
-# imported .txt/.md/.pdf content, so nothing here should depend on markup.
 Fixture = Tuple[str, str, str, List[Tuple[str, str]]]
 
 FIXTURES: List[Fixture] = [
-    (
-        "microsoft",
-        "who invented microsoft?",
-        "History of Microsoft",
-        [
-            (
-                "Microsoft PowerPoint",
-                "Microsoft PowerPoint is a presentation program. Slides "
-                "can include text, images and charts. PowerPoint is part "
-                "of the Microsoft Office suite and is available for "
-                "Windows and macOS. Use the ribbon to change slide "
-                "layout, apply a theme, or start a slideshow.",
-            ),
-            (
-                "Outlook.com and your Microsoft account",
-                "Sign in to Outlook.com with your Microsoft account. If "
-                "you forgot your password, use the account recovery page "
-                "to reset it. You can manage your subscription, update "
-                "billing details, and change your login preferences from "
-                "the account dashboard.",
-            ),
-            (
-                "History of Microsoft",
-                "Microsoft was founded by Bill Gates and Paul Allen on "
-                "April 4, 1975, in Albuquerque, New Mexico. The two "
-                "co-founders had previously written a BASIC interpreter "
-                "for the Altair 8800. The company moved to Bellevue, "
-                "Washington in 1979 and later became a corporation.",
-            ),
-        ],
-    ),
-    (
-        "transistor",
-        "who invented the transistor and when was it invented?",
-        "History of the transistor",
-        [
-            (
-                "Field-effect transistor",
-                "A field-effect transistor uses an electric field to "
-                "control the flow of current through a semiconductor. "
-                "Variants include the MOSFET and the JFET. The device "
-                "has a gate, a drain and a source terminal, and is used "
-                "widely in analog and digital circuits.",
-            ),
-            (
-                "Invention",
-                "An invention is a unique or novel device, method, "
-                "composition or process. An invention that is patentable "
-                "must be novel and non-obvious. Inventions can be "
-                "improvements upon a machine or product, or a new "
-                "process for creating an object or a result.",
-            ),
-            (
-                "History of the transistor",
-                "John Bardeen and Walter Brattain invented the "
-                "point-contact transistor at Bell Labs in 1947. William "
-                "Shockley developed the bipolar junction transistor in "
-                "1948. The three shared the Nobel Prize in Physics in "
-                "1956 for their research on semiconductors.",
-            ),
-        ],
-    ),
-    (
-        "cats",
-        "how many cats are in america?",
-        "Pet cat population statistics",
-        [
-            (
-                "Cat breeds",
-                "There are many recognised cat breeds. The Siamese, the "
-                "Maine Coon, the Persian and the Bengal are among the "
-                "most popular. Breed standards describe coat length, "
-                "colour, body shape and temperament for each recognised "
-                "pedigree.",
-            ),
-            (
-                "Cat behavior",
-                "Cats communicate through vocalisation and body "
-                "language. A cat may knead with its paws, rub against "
-                "furniture, or sleep for long stretches during the day. "
-                "Many cats are most active at dawn and dusk.",
-            ),
-            (
-                "Pet cat population statistics",
-                "An estimated 73.8 million pet cats live in the United "
-                "States. Survey data from the American Pet Products "
-                "Association puts the number of cat-owning households at "
-                "roughly 46.5 million, about 29 percent of all "
-                "households. Census-style demographics suggest the "
-                "population has grown steadily.",
-            ),
-        ],
-    ),
-    (
-        "purr",
-        "why do cats purr?",
-        "Why cats purr",
-        [
-            (
-                "Cats",
-                "The cat is a small domesticated carnivorous mammal. It "
-                "is the only domesticated species in the family Felidae. "
-                "Cats are valued as companion animals and were "
-                "domesticated in the Near East around 7500 BC.",
-            ),
-            (
-                "Why cats purr",
-                "Cats purr because of rapid twitching in the muscles of "
-                "the larynx, which causes the vocal cords to vibrate as "
-                "the cat breathes. The mechanism explains how the sound "
-                "continues on both the inhale and the exhale. Research "
-                "suggests the reason is not only contentment: purring "
-                "may also serve to self-soothe when a cat is injured, "
-                "because the low-frequency vibration appears to promote "
-                "healing.",
-            ),
-        ],
-    ),
+    ("microsoft", "who invented microsoft?", "History of Microsoft", [
+        ("Microsoft PowerPoint",
+         "Microsoft PowerPoint is a presentation program. Slides can include text, "
+         "images and charts. PowerPoint is part of the Microsoft Office suite and is "
+         "available for Windows and macOS. Use the ribbon to change slide layout, apply "
+         "a theme, or start a slideshow."),
+        ("Outlook.com and your Microsoft account",
+         "Sign in to Outlook.com with your Microsoft account. If you forgot your password, "
+         "use the account recovery page to reset it. You can manage your subscription, "
+         "update billing details, and change your login preferences from the account dashboard."),
+        ("History of Microsoft",
+         "Microsoft was founded by Bill Gates and Paul Allen on April 4, 1975, in "
+         "Albuquerque, New Mexico. The two co-founders had previously written a BASIC "
+         "interpreter for the Altair 8800. The company moved to Bellevue, Washington in "
+         "1979 and later became a corporation."),
+    ]),
+    ("transistor", "who invented the transistor and when was it invented?", "History of the transistor", [
+        ("Field-effect transistor",
+         "A field-effect transistor uses an electric field to control the flow of current "
+         "through a semiconductor. Variants include the MOSFET and the JFET. The device has "
+         "a gate, a drain and a source terminal, and is used widely in analog and digital circuits."),
+        ("Invention",
+         "An invention is a unique or novel device, method, composition or process. An "
+         "invention that is patentable must be novel and non-obvious. Inventions can be "
+         "improvements upon a machine or product, or a new process for creating an object or a result."),
+        ("History of the transistor",
+         "John Bardeen and Walter Brattain invented the point-contact transistor at Bell Labs "
+         "in 1947. William Shockley developed the bipolar junction transistor in 1948. The "
+         "three shared the Nobel Prize in Physics in 1956 for their research on semiconductors."),
+    ]),
+    ("cats", "how many cats are in america?", "Pet cat population statistics", [
+        ("Cat breeds",
+         "There are many recognised cat breeds. The Siamese, the Maine Coon, the Persian and "
+         "the Bengal are among the most popular. Breed standards describe coat length, colour, "
+         "body shape and temperament for each recognised pedigree."),
+        ("Cat behavior",
+         "Cats communicate through vocalisation and body language. A cat may knead with its "
+         "paws, rub against furniture, or sleep for long stretches during the day. Many cats "
+         "are most active at dawn and dusk."),
+        ("Pet cat population statistics",
+         "An estimated 73.8 million pet cats live in the United States. Survey data from the "
+         "American Pet Products Association puts the number of cat-owning households at roughly "
+         "46.5 million, about 29 percent of all households. Census-style demographics suggest "
+         "the population has grown steadily."),
+    ]),
+    ("purr", "why do cats purr?", "Why cats purr", [
+        ("Cats",
+         "The cat is a small domesticated carnivorous mammal. It is the only domesticated "
+         "species in the family Felidae. Cats are valued as companion animals and were "
+         "domesticated in the Near East around 7500 BC."),
+        ("Why cats purr",
+         "Cats purr because of rapid twitching in the muscles of the larynx, which causes the "
+         "vocal cords to vibrate as the cat breathes. The mechanism explains how the sound "
+         "continues on both the inhale and the exhale. Research suggests the reason is not only "
+         "contentment: purring may also serve to self-soothe when a cat is injured, because the "
+         "low-frequency vibration appears to promote healing."),
+    ]),
 ]
 
 
 def run_fixture(fixture: Fixture, limit: int = 5) -> bool:
-    """Index one fixture into a temp DB and print the ranking. True if OK."""
     name, query, expected_top, chunks = fixture
     tmpdir = tempfile.mkdtemp(prefix="brisart-offline-replay-")
     try:
@@ -193,12 +109,8 @@ def run_fixture(fixture: Fixture, limit: int = 5) -> bool:
         try:
             for title, text in chunks:
                 index.add_source(
-                    source_type="file",
-                    location=f"/fixtures/{name}/{title}.txt",
-                    title=title,
-                    text=text,
-                    extension="txt",
-                    size_bytes=len(text),
+                    source_type="file", location=f"/fixtures/{name}/{title}.txt",
+                    title=title, text=text, extension="txt", size_bytes=len(text),
                 )
 
             intent = detect_intent(query)
@@ -224,9 +136,7 @@ def run_fixture(fixture: Fixture, limit: int = 5) -> bool:
                     reason.append("penalty=" + ",".join(penalties))
                 if not reason:
                     reason.append("term overlap only")
-                print(
-                    f"  {position}. {doc['score']:7.3f}  {doc['title']}"
-                )
+                print(f"  {position}. {doc['score']:7.3f}  {doc['title']}")
                 print(f"        source: {doc['location']}")
                 print(f"        reason: {'; '.join(reason)}")
 

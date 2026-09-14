@@ -3,50 +3,25 @@ File: brisart_ai/ui/app.py
 
 Purpose
 -------
-The BrisartAI desktop window -- the only entry point for the program
-(pure Python/Tkinter, no third-party GUI deps). brisartai.py calls
-run(), the sole external-facing function here besides BrisartApp
-itself.
+The BrisartAI desktop window -- the only entry point for the program.
 
 Communication / relationships
 ------------------------------
 - brisartai.py: the only caller of run().
-- Constructs brisart_ai.ui.service.BrisartService,
-  brisart_ai.ui.sidebar.Sidebar, brisart_ai.ui.chat_panel.ChatPanel, and
-  brisart_ai.ui.dialogs.{SettingsDialog,ask_import_path,ask_note,
-  ask_text}.
-- Imports brisart_ai.ui.theme for palette/spacing and
-  brisart_ai.version_info.{APP_NAME,__version__} for the window title
-  and startup banner.
+- Constructs brisart_ai.ui.service.BrisartService, Sidebar, ChatPanel,
+  dialogs.
+- Imports brisart_ai.ui.theme, brisart_ai.version_info.
 
 Settings / parameters
 ----------------------
-- Construction order in BrisartApp.__init__ matters: BrisartService is
-  built BEFORE the Tk window (super().__init__()), specifically so a
-  startup failure opening the SQLite index propagates out of the
-  constructor with NO Tk window ever created.
-- self._busy: only one request is in flight at a time; a second
-  question typed before the first answers is simply ignored rather than
-  queued.
-- force_web=None (ordinary typed questions) defers to the Automatic Web
-  Research setting; the "Research Web" sidebar action passes
-  force_web=True to force a fresh search.
+- Construction order: BrisartService built BEFORE the Tk window.
+- self._busy.
+- force_web=None defers to Automatic Web Research setting.
 
 Edge cases
 ----------
-- run() wraps app construction in a single try/except and hands any
-  failure to _show_startup_error(), which spins up a throwaway hidden
-  tk.Tk() purely to host a proper error dialog -- the alternative, a
-  half-built invisible window plus a console traceback, is what this
-  replaced.
-- _answer_question() runs the actual search on a background thread
-  (threading.Thread(..., daemon=True)) so the Tk main loop keeps
-  repainting instead of freezing, marshaling the result back to the main
-  thread via self.after(0, ...).
-- _on_answer_ready() catches any exception raised inside the worker and
-  turns it into a plain "Something went wrong answering that: ..."
-  message rather than letting the background thread's exception be
-  silently swallowed or crash the app.
+- run() wraps app construction in a single try/except.
+- _answer_question() runs on a background thread.
 """
 from __future__ import annotations
 
@@ -81,7 +56,6 @@ indexed, including your notes."""
 
 class BrisartApp(tk.Tk):
     def __init__(self, db_path: str = DEFAULT_DB):
-        # Service built BEFORE the Tk window exists (see module docstring).
         service = BrisartService(db_path)
 
         super().__init__()
@@ -90,7 +64,6 @@ class BrisartApp(tk.Tk):
         self.geometry("980x640")
         self.minsize(760, 480)
         self.configure(bg=theme.BG_APP)
-
         self._busy = False
 
         self._configure_style()
@@ -115,10 +88,8 @@ class BrisartApp(tk.Tk):
 
     def _build_layout(self) -> None:
         actions = {
-            "import": self._action_import,
-            "note": self._action_note,
-            "research": self._action_research,
-            "settings": self._action_settings,
+            "import": self._action_import, "note": self._action_note,
+            "research": self._action_research, "settings": self._action_settings,
             "help": self._action_help,
         }
         self.sidebar = Sidebar(self, actions)
@@ -135,33 +106,23 @@ class BrisartApp(tk.Tk):
         total, files, web = self.service.counts()
         self.sidebar.set_status(total, files, web)
 
-    def _answer_question(
-        self,
-        question: str,
-        force_web: Optional[bool] = None,
-    ) -> None:
-        """Answer a question on a background thread, then show it inline."""
+    def _answer_question(self, question: str, force_web: Optional[bool] = None) -> None:
         question = question.strip()
         if not question or self._busy:
             return
-
         self._busy = True
         searching_web = (
-            force_web
-            if force_web is not None
-            else self.service.settings.get("auto_web_research")
+            force_web if force_web is not None else self.service.settings.get("auto_web_research")
         )
         if searching_web:
-            self.chat.append_system(
-                "Searching the public web and reading the top results..."
-            )
+            self.chat.append_system("Searching the public web and reading the top results...")
         else:
             self.chat.append_system("Searching your imported files and notes...")
 
         def worker() -> None:
             try:
                 answer = self.service.ask(question, force_web=force_web)
-            except Exception as exc:  # keep the UI alive even on backend errors
+            except Exception as exc:
                 answer = f"Something went wrong answering that: {exc}"
             self.after(0, self._on_answer_ready, answer)
 
@@ -216,7 +177,6 @@ class BrisartApp(tk.Tk):
 
 
 def _show_startup_error(exc: Exception) -> None:
-    """Friendly dialog for a startup failure, via a throwaway hidden Tk root."""
     root = tk.Tk()
     root.withdraw()
     messagebox.showerror(

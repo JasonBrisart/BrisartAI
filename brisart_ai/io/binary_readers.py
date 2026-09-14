@@ -3,52 +3,34 @@ File: brisart_ai/io/binary_readers.py
 
 Purpose
 -------
-Pure-Python, best-effort text extraction for Word (.docx), PowerPoint
-(.pptx), Excel (.xlsx), OpenDocument Text (.odt), and PDF (.pdf) --
-stdlib only (zipfile, xml.etree, re, zlib), no third-party parsing
-libraries. The goal throughout is searchable text, not faithful visual
-rendering, so these are intentionally simple.
+Pure-Python, best-effort text extraction for Word/PowerPoint/Excel/ODT/PDF.
 
 Communication / relationships
 ------------------------------
-- brisart_ai/io/readers.py: read_file() dispatches to read_docx(),
-  read_pptx(), read_xlsx(), read_odt(), or read_pdf_best_effort() based
-  on file extension; this is the only caller.
-- Imports nothing from elsewhere in brisart_ai; only zipfile, zlib, re,
-  and xml.etree.ElementTree.
+- brisart_ai/io/readers.py: read_file() dispatches here.
+- Imports brisart_ai.native.brisart_inflate.brisart_zlib_decompress()
+  (replacing zlib.decompress() for PDF content streams) -- see
+  native/README.md for verification.
 
 Settings / parameters
 ----------------------
-- read_pdf_best_effort(path, max_bytes=10_000_000): caps how much of a
-  PDF is scanned, so an unusually large PDF cannot stall ingestion.
-- _xml_text(): shared ElementTree text-node extractor used by all four
-  Office/ODT readers.
+- read_pdf_best_effort(path, max_bytes=10_000_000).
 
 Edge cases
 ----------
-- The Office formats (.docx/.pptx/.xlsx/.odt) are zip containers holding
-  XML parts; each reader just unzips the relevant parts (Word: all of
-  word/*.xml; PowerPoint: slides AND notes slides, so speaker notes are
-  searchable too; Excel: sharedStrings.xml plus every worksheet; ODT:
-  content.xml) and pulls text nodes out with ElementTree.
-- read_pdf_best_effort() is a hand-rolled, non-rendering scraper: it
-  finds literal parenthesized text runs directly in the raw bytes, then
-  separately zlib-decompresses any stream...endstream block it can (the
-  common case for modern PDF content streams) and pulls parenthesized
-  runs out of that too. It makes no attempt to reconstruct reading order
-  or layout, and a stream that fails to decompress is simply skipped.
-- Every function here returns an empty string on any failure (corrupt
-  zip, malformed XML, undecompressable stream) rather than raising --
-  callers already treat empty text as "nothing to index," so one bad
-  file never blocks an import run.
+- Office formats are zip containers; each reader unzips relevant parts.
+- read_pdf_best_effort() finds literal parenthesized runs, then
+  DEFLATE-decompresses stream...endstream blocks via brisart_zlib_decompress().
+- Every function returns "" on any failure rather than raising.
 """
 from __future__ import annotations
 
 import re
 import zipfile
-import zlib
 from pathlib import Path
 from xml.etree import ElementTree
+
+from brisart_ai.native.brisart_inflate import brisart_zlib_decompress
 
 
 def _xml_text(xml_bytes: bytes) -> str:
@@ -129,20 +111,17 @@ def read_pdf_best_effort(path: Path, max_bytes: int = 10_000_000) -> str:
         raw = path.read_bytes()[:max_bytes]
     except Exception:
         return ""
-
     chunks = []
-
     for match in re.finditer(rb"\((?:\\.|[^\\)])*\)", raw):
         value = match.group(0)[1:-1]
         value = value.replace(rb"\\(", b"(").replace(rb"\\)", b")").replace(rb"\\n", b"\n")
         decoded = value.decode("utf-8", "replace")
         if decoded.strip():
             chunks.append(decoded.strip())
-
     for match in re.finditer(rb"stream\r?\n(.*?)\r?\nendstream", raw, re.DOTALL):
         stream = match.group(1).strip(b"\r\n")
         try:
-            inflated = zlib.decompress(stream)
+            inflated = brisart_zlib_decompress(stream)
         except Exception:
             continue
         for text_match in re.finditer(rb"\((?:\\.|[^\\)])*\)", inflated):
@@ -151,7 +130,6 @@ def read_pdf_best_effort(path: Path, max_bytes: int = 10_000_000) -> str:
             decoded = value.decode("utf-8", "replace")
             if decoded.strip():
                 chunks.append(decoded.strip())
-
     text = "\n".join(chunks)
     text = re.sub(r"\s+", " ", text).strip()
     return text

@@ -3,47 +3,28 @@ File: brisart_ai/knowledge/index.py
 
 Purpose
 -------
-The SQLite-backed store every indexed file, web page, and note lands
-in. Two tables: sources (type, location, title, full text, content
-hash, size, extension, timestamp) and terms (flat term-frequency rows
-keyed by (term, source_id), read directly by knowledge/ranker.py for
-TF-IDF scoring).
+The SQLite-backed store every indexed file, web page, and note lands in.
 
 Communication / relationships
 ------------------------------
-- Three writers call add_source(): brisart_ai/knowledge/ingest.py,
-  brisart_ai/web/crawler.py, and brisart_ai/knowledge/vault.py's note
-  mirroring.
-- brisart_ai/knowledge/ranker.py: reads terms/sources directly via SQL
-  for scoring.
-- brisart_ai/ui/service.py: calls purge_blocked_web_sources() once at
-  startup.
+- brisart_ai/knowledge/ingest.py, brisart_ai/web/crawler.py,
+  brisart_ai/knowledge/vault.py call add_source().
+- brisart_ai/knowledge/ranker.py reads terms/sources directly via SQL.
+- brisart_ai/ui/service.py calls purge_blocked_web_sources() at startup.
 - Imports brisart_ai.blocklist.is_junk_web_source() and
   brisart_ai.util.{now_ts, stable_hash, tokenize}.
 
 Settings / parameters
 ----------------------
-- DEFAULT_DB: anchored to the project root (parents[2] from this file:
-  knowledge/index.py -> brisart_ai/ -> project root) so it always lands
-  at <project root>/brisart_ai_index.sqlite3 regardless of the working
-  directory the app was launched from.
-- check_same_thread=False: background web-research threads share this
-  connection with the main-thread UI, serialized at the app level via
-  BrisartApp._busy.
-- add_source()'s source_key is a stable hash of source_type + location,
-  so re-adding the same file or re-crawling the same URL always fully
-  replaces both the sources row and every term row for it -- nothing
-  stale from a previous version of that source lingers.
+- DEFAULT_DB: anchored to project root (parents[2]).
+- check_same_thread=False.
+- add_source()'s source_key is a stable hash of source_type + location.
 
 Edge cases
 ----------
-- add_source() raises ValueError for a missing type/location
-  (unrecoverable metadata) but just returns False for empty text (an
-  ordinary, expected outcome during bulk ingestion, not an error).
-- purge_junk_web_sources() sweeps stale dictionary/definition pages out
-  of the index using the shared blocklist policy, and only ever touches
-  source_type = 'web' rows -- local files and notes are never subject to
-  that policy.
+- add_source() raises ValueError for missing type/location, returns
+  False for empty text.
+- purge_junk_web_sources() only touches source_type = 'web' rows.
 """
 from __future__ import annotations
 
@@ -101,48 +82,27 @@ class Index:
         self.conn.commit()
 
     def purge_junk_web_sources(self) -> int:
-        """Delete stale dictionary/off-topic web rows left by earlier builds."""
         try:
             rows = self.conn.execute(
                 "SELECT id, location FROM sources WHERE source_type = 'web'"
             ).fetchall()
         except sqlite3.Error:
             return 0
-
-        doomed = [
-            int(source_id)
-            for source_id, location in rows
-            if is_junk_web_source(location)
-        ]
+        doomed = [int(sid) for sid, loc in rows if is_junk_web_source(loc)]
         if not doomed:
             return 0
-
         with self.conn:
-            self.conn.executemany(
-                "DELETE FROM terms WHERE source_id = ?",
-                [(source_id,) for source_id in doomed],
-            )
-            self.conn.executemany(
-                "DELETE FROM sources WHERE id = ?",
-                [(source_id,) for source_id in doomed],
-            )
+            self.conn.executemany("DELETE FROM terms WHERE source_id = ?", [(s,) for s in doomed])
+            self.conn.executemany("DELETE FROM sources WHERE id = ?", [(s,) for s in doomed])
         return len(doomed)
 
     def purge_blocked_web_sources(self) -> int:
-        """Backwards-compatible alias for purge_junk_web_sources()."""
         return self.purge_junk_web_sources()
 
     def add_source(
-        self,
-        source_type: str,
-        location: str,
-        title: str,
-        text: str,
-        content_hash: str = "",
-        size_bytes: int = 0,
-        extension: str = "",
+        self, source_type: str, location: str, title: str, text: str,
+        content_hash: str = "", size_bytes: int = 0, extension: str = "",
     ) -> bool:
-        """Add or update an indexed source. True when non-empty text was indexed."""
         cleaned_type = str(source_type or "").strip()
         cleaned_location = str(location or "").strip()
         cleaned_title = str(title or "").strip()
@@ -163,57 +123,37 @@ class Index:
         with self.conn:
             self.conn.execute(
                 """
-                INSERT INTO sources(
-                    source_key, source_type, location, title, text,
-                    content_hash, size_bytes, extension, indexed_at
-                )
+                INSERT INTO sources(source_key, source_type, location, title, text,
+                    content_hash, size_bytes, extension, indexed_at)
                 VALUES(?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(source_key) DO UPDATE SET
-                    source_type = excluded.source_type,
-                    location = excluded.location,
-                    title = excluded.title,
-                    text = excluded.text,
-                    content_hash = excluded.content_hash,
-                    size_bytes = excluded.size_bytes,
-                    extension = excluded.extension,
-                    indexed_at = excluded.indexed_at
+                    source_type=excluded.source_type, location=excluded.location,
+                    title=excluded.title, text=excluded.text, content_hash=excluded.content_hash,
+                    size_bytes=excluded.size_bytes, extension=excluded.extension,
+                    indexed_at=excluded.indexed_at
                 """,
-                (
-                    source_key, cleaned_type, cleaned_location,
-                    cleaned_title, cleaned_text, cleaned_hash,
-                    max(0, int(size_bytes or 0)), cleaned_extension,
-                    indexed_at,
-                ),
+                (source_key, cleaned_type, cleaned_location, cleaned_title, cleaned_text,
+                 cleaned_hash, max(0, int(size_bytes or 0)), cleaned_extension, indexed_at),
             )
-            row = self.conn.execute(
-                "SELECT id FROM sources WHERE source_key = ?",
-                (source_key,),
-            ).fetchone()
+            row = self.conn.execute("SELECT id FROM sources WHERE source_key = ?", (source_key,)).fetchone()
             if row is None:
                 raise RuntimeError("Source was written but could not be retrieved")
             source_id = int(row[0])
-
-            self.conn.execute(
-                "DELETE FROM terms WHERE source_id = ?", (source_id,)
-            )
+            self.conn.execute("DELETE FROM terms WHERE source_id = ?", (source_id,))
             counts = collections.Counter(
                 tokenize(cleaned_title + " " + cleaned_location + " " + cleaned_text)
             )
             if counts:
                 self.conn.executemany(
                     "INSERT OR REPLACE INTO terms(term, source_id, tf) VALUES(?,?,?)",
-                    [
-                        (term, source_id, int(term_frequency))
-                        for term, term_frequency in counts.items()
-                    ],
+                    [(term, source_id, int(tf)) for term, tf in counts.items()],
                 )
         return True
 
     def source_count(self, source_type: Optional[str] = None) -> int:
         if source_type:
             row = self.conn.execute(
-                "SELECT COUNT(*) FROM sources WHERE source_type = ?",
-                (source_type,),
+                "SELECT COUNT(*) FROM sources WHERE source_type = ?", (source_type,)
             ).fetchone()
         else:
             row = self.conn.execute("SELECT COUNT(*) FROM sources").fetchone()

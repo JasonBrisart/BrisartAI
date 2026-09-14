@@ -6,116 +6,52 @@ Purpose
 Dependency-free public web search across seven providers, tried in
 order from MOST likely to be blocked to LEAST likely: Startpage -> Brave
 Search -> DuckDuckGo HTML -> DuckDuckGo Lite -> Bing HTML -> Mojeek ->
-Wikipedia API. Every provider before the Wikipedia API is an HTML
-scraper, fragile in a different way (heavy bot-detection, explicit
-challenge pages, rate-limiting, undocumented markup) -- rather than
-trying the most-established providers first, the chain spends its
-riskiest request first, so each subsequent provider is both a fallback
-for the ones before it and a strictly safer bet in its own right. The
-Wikipedia API runs last as a stable, key-free floor on quality that
-keeps working under exactly the conditions that break every scraper
-above it, at the cost of covering only encyclopedic topics.
-
-Only organic result links are extracted from each provider's HTML;
-results are normalized (tracking params stripped, redirect wrappers
-unwound), deduplicated, and relatedness-filtered per result before
-being handed back to the crawler.
-
-Two different extraction strategies, because two different levels of
-markup knowledge exist. For DuckDuckGo and Bing, _ResultLinkParser
-recognizes known result-link CSS classes or anchors nested in <h2>/<h3>
-result-title headings. For Mojeek/Brave/Startpage, whose markup is
-either undocumented or changes often (Brave's own scraping notes call
-their result markup "unlabeled" and something that "shifts often"),
-_extract_result_links() instead uses domain-based heuristics -- a
-link's host must simply differ from the search engine's own host and
-not be one of its help/account/static subdomains. This is less precise
-on day one than a hand-tuned selector, but degrades gracefully ("still
-gets titles and URLs, maybe a rougher snippet") instead of silently
-returning nothing the next time markup changes.
-
-IMPORTANT -- unverified against a live fetch. The exact current HTML
-structure of Mojeek, Brave Search, and Startpage was not verified
-against a live fetch during development. If one of these providers
-returns zero results for a query known to have results, it's most
-likely serving a challenge/consent page, or its markup has changed
-enough that even the generic extractor can no longer find outbound
-links.
-
-Per-result relatedness, not per-batch. _partition_related_results()
-judges each (url, title) pair individually against the query's
-meaningful terms, rather than the older whole-batch check (which only
-asked "does *any* result in this batch share a query term?" -- a single
-good result waved an entire batch through, garbage included). A single
-genuinely unrelated result riding alongside good ones is dropped on its
-own now. If partitioning would drop EVERY result in a batch, that's
-still treated as a throttled/decoy response and the whole batch is
-discarded, preserving the old whole-batch safety valve as a special
-case.
+Wikipedia API.
 
 Communication / relationships
 ------------------------------
 - brisart_ai/web/crawler.py: web_search_and_ingest() is the sole caller
-  of search_public_web(), requesting titles via with_titles=True.
-- scripts/debug_search_replay.py: calls search_public_web() directly to
-  replay the provider chain outside the crawler.
+  of search_public_web().
 - Imports brisart_ai.blocklist.{FUNCTION_WORDS, is_blocked_web_host},
   brisart_ai.util.normalize_url, brisart_ai.web.fetcher.{MAX_PAGE_BYTES,
-  REQUEST_TIMEOUT}, and brisart_ai.web.policy.USER_AGENT.
+  REQUEST_TIMEOUT}, brisart_ai.web.policy.USER_AGENT.
+- Also imports brisart_ai.native.brisart_codec.brisart_urlsafe_b64decode
+  (replacing base64.urlsafe_b64decode), brisart_ai.native.brisart_json.
+  brisart_loads (replacing json.loads), brisart_ai.native.brisart_markup.
+  {BrisartMarkupParser, brisart_unescape} (replacing html.parser.HTMLParser
+  and html.unescape), and brisart_ai.native.brisart_url's split/unsplit/
+  parse_qsl/urlencode/urljoin/quote/unquote (replacing urllib.parse). See
+  brisart_ai/native/README.md for verification. Actual HTTP requests
+  (urllib.request/urllib.error) are unchanged.
 
 Settings / parameters
 ----------------------
-- Provider URLs: DUCKDUCKGO_HTML_URL, DUCKDUCKGO_LITE_URL,
-  BING_SEARCH_URL, MOJEEK_SEARCH_URL, BRAVE_SEARCH_URL,
-  STARTPAGE_SEARCH_URL, WIKIPEDIA_API_URL/WIKIPEDIA_ARTICLE_BASE.
-- _BLOCK_MARKERS / _CHALLENGE_MARKERS: substrings that mark a returned
-  page as a bot-challenge, rate-limit, or consent wall rather than real
-  results.
-- _SEARCH_HOSTS: the search engines' own hosts (and known account/help
-  subdomains), excluded from results so a provider's own chrome is never
-  mistaken for an organic result.
-- _RESULT_LINK_CLASSES / _RESULT_TITLE_TAGS: DuckDuckGo/Bing-specific
-  CSS classes and heading tags used by _ResultLinkParser.
-- search_public_web(with_titles=False): default return type is
-  list[str] of URLs (backward compatible with every pre-beta.8 caller);
-  with_titles=True returns list[tuple[str, str]] of (url, title) pairs.
+- Provider URLs and _BLOCK_MARKERS / _SEARCH_HOSTS / _RESULT_LINK_CLASSES.
+- search_public_web(with_titles=False): default list[str], with_titles=True
+  returns list[tuple[str, str]].
 
 Edge cases
 ----------
-- _decode_bing_target() unwraps Bing's /ck/a click-tracking redirect
-  (base64url-decoding the u parameter after its short encoding-tag
-  prefix); if unwrapping fails for any reason, the original wrapped URL
-  is returned unchanged rather than raising.
-- _normalize_result_url() rejects a candidate outright if its host is
-  one of the search engine's own hosts or a blocked dictionary host,
-  independent of the later relatedness partitioning.
-- _partition_related_results(): if `query` has no meaningful terms
-  (4+ letter words that aren't common function words), every result is
-  treated as related; if partitioning would drop every result, that's
-  evidence of a throttled/decoy response and callers discard the whole
-  batch.
-- Every provider function is implemented directly in this file rather
-  than a companion module -- a previous split caused a real startup
-  crash when a companion module existed on disk but was accidentally
-  left empty, and this module's top-level import from it raised
-  ImportError before the app could even start. Keeping every provider in
-  one file means there's nothing else that needs to exist and nothing
-  else to keep in sync.
+- _decode_bing_target() unwraps Bing's /ck/a redirect via brisart_codec.
+- _partition_related_results() judges each result individually.
+- Every provider function is implemented directly in this file.
 """
 from __future__ import annotations
 
-import base64
-import html
-import json
 import re
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from html.parser import HTMLParser
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from brisart_ai.blocklist import FUNCTION_WORDS, is_blocked_web_host
+from brisart_ai.native.brisart_codec import brisart_urlsafe_b64decode
+from brisart_ai.native.brisart_json import brisart_loads
+from brisart_ai.native.brisart_markup import BrisartMarkupParser, brisart_unescape
+from brisart_ai.native.brisart_url import (
+    brisart_parse_qsl, brisart_quote, brisart_unquote, brisart_urlencode,
+    brisart_urljoin, brisart_urlsplit, brisart_urlunsplit,
+)
 from brisart_ai.util import normalize_url
 from brisart_ai.web.fetcher import MAX_PAGE_BYTES, REQUEST_TIMEOUT
 from brisart_ai.web.policy import USER_AGENT
@@ -144,29 +80,23 @@ _SEARCH_HOSTS = {
 }
 
 _IGNORED_SCHEMES = ("javascript:", "mailto:", "tel:", "data:")
-
-# CSS classes marking an anchor as an *organic* result link rather than
-# chrome, ads, or dictionary/knowledge-panel widgets.
-_RESULT_LINK_CLASSES = (
-    "result__a",     # DuckDuckGo HTML organic result title
-    "result-link",   # DuckDuckGo Lite organic result title
-    "result__url",   # DuckDuckGo HTML visible URL anchor
-)
-
-# Header tags wrapping organic result titles where the anchor itself
-# carries no distinctive class (notably Bing).
+_RESULT_LINK_CLASSES = ("result__a", "result-link", "result__url")
 _RESULT_TITLE_TAGS = ("h2", "h3")
 
 
-class _ResultLinkParser(HTMLParser):
-    """Collect only *organic search result* anchor URLs.
+def _quote_plus(text: str) -> str:
+    return brisart_quote(text, safe="").replace("%20", "+")
 
-    An anchor counts as an organic result when its class matches a known
-    result-link class (DuckDuckGo), or it's nested inside an <h2>/<h3>
-    result-title heading (Bing and DuckDuckGo fallbacks). Everything
-    else -- nav, ads, sidebars, "people also ask," footer links -- is
-    ignored.
-    """
+
+def _parse_qs(query: str, keep_blank_values: bool = False) -> Dict[str, List[str]]:
+    grouped: Dict[str, List[str]] = {}
+    for key, value in brisart_parse_qsl(query, keep_blank_values=keep_blank_values):
+        grouped.setdefault(key, []).append(value)
+    return grouped
+
+
+class _ResultLinkParser(BrisartMarkupParser):
+    """Collect only *organic search result* anchor URLs."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -193,15 +123,13 @@ class _ResultLinkParser(HTMLParser):
             return
         if lowered_tag != "a":
             return
-
         href = ""
         for name, value in attrs:
             if name.casefold() == "href" and value:
-                href = html.unescape(value)
+                href = brisart_unescape(value)
                 break
         if not href:
             return
-
         if self._title_depth > 0 or self._class_is_result(attrs):
             self._capturing = True
             self._current_href = href
@@ -230,11 +158,7 @@ class _ResultLinkParser(HTMLParser):
 def _request_headers() -> Dict[str, str]:
     return {
         "User-Agent": USER_AGENT,
-        "Accept": (
-            "text/html,application/xhtml+xml,"
-            "application/xml;q=0.9,text/xml;q=0.9,"
-            "text/plain;q=0.8,*/*;q=0.5"
-        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5",
         "Accept-Language": "en-US,en;q=0.8",
         "Cache-Control": "no-cache",
         "Connection": "close",
@@ -252,10 +176,9 @@ def _read_response(response) -> str:
 def _http_get(url: str, parameters: Optional[Dict[str, str]] = None) -> Optional[str]:
     request_url = url
     if parameters:
-        encoded = urllib.parse.urlencode(parameters)
+        encoded = brisart_urlencode(list(parameters.items()))
         separator = "&" if "?" in request_url else "?"
         request_url = f"{request_url}{separator}{encoded}"
-
     request = urllib.request.Request(request_url, headers=_request_headers(), method="GET")
     try:
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
@@ -270,12 +193,11 @@ def _http_get(url: str, parameters: Optional[Dict[str, str]] = None) -> Optional
 
 
 def _http_post(url: str, parameters: Dict[str, str]) -> Optional[str]:
-    encoded = urllib.parse.urlencode(parameters).encode("utf-8")
+    encoded = brisart_urlencode(list(parameters.items())).encode("utf-8")
     headers = _request_headers()
     headers["Content-Type"] = "application/x-www-form-urlencoded"
     headers["Origin"] = "https://duckduckgo.com"
     headers["Referer"] = "https://duckduckgo.com/"
-
     request = urllib.request.Request(url, data=encoded, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
@@ -297,23 +219,7 @@ def _looks_blocked(raw_text: str) -> bool:
 def _partition_related_results(
     query: str, results: Sequence[Tuple[str, str]],
 ) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
-    """Split provider results into (related, unrelated), judged per-result.
-
-    Each pair is judged individually against the query's meaningful
-    terms (4+ letter words that aren't common function words) -- a
-    deliberately low bar meant only to catch a wholesale topic mismatch,
-    not to rank on-topic results against each other (that's
-    knowledge/ranker.py's job once a page is indexed). Replaces an older
-    whole-batch check that let a single good result wave through an
-    entire batch, garbage included -- observed live, an unrelated
-    "vandalism incident" Wikipedia page rode alongside two genuinely
-    relevant pages and got indexed too.
-
-    If `query` has no meaningful terms, every result is treated as
-    related. If partitioning would drop EVERY result, that's still
-    evidence of a throttled/decoy response -- callers should discard the
-    whole batch, same as the old whole-batch check did.
-    """
+    """Split provider results into (related, unrelated), judged per-result."""
     terms = {
         word for word in re.findall(r"[a-z0-9]+", str(query or "").casefold())
         if len(word) > 3 and word not in FUNCTION_WORDS
@@ -344,40 +250,37 @@ def _is_search_host(hostname: str) -> bool:
 
 def _remove_tracking_parameters(url: str) -> str:
     try:
-        parsed = urllib.parse.urlsplit(url)
+        parsed = brisart_urlsplit(url)
     except ValueError:
         return ""
-
     ignored_parameters = {
         "fbclid", "gclid", "mc_cid", "mc_eid", "ref", "ref_src", "source",
         "utm_campaign", "utm_content", "utm_medium", "utm_source", "utm_term",
     }
-    parameters = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    parameters = brisart_parse_qsl(parsed.query, keep_blank_values=True)
     cleaned_parameters = [
-        (name, value) for name, value in parameters
-        if name.casefold() not in ignored_parameters
+        (name, value) for name, value in parameters if name.casefold() not in ignored_parameters
     ]
-    cleaned_query = urllib.parse.urlencode(cleaned_parameters, doseq=True)
-    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, cleaned_query, ""))
+    cleaned_query = brisart_urlencode(cleaned_parameters, doseq=True)
+    return brisart_urlunsplit(
+        type(parsed)(parsed.scheme, parsed.netloc, parsed.path, cleaned_query, "")
+    )
 
 
 def _decode_duckduckgo_target(url: str) -> str:
     try:
-        parsed = urllib.parse.urlsplit(url)
+        parsed = brisart_urlsplit(url)
     except ValueError:
         return ""
-
     if "duckduckgo.com" not in parsed.netloc.casefold():
         return url
-
-    parameters = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    parameters = _parse_qs(parsed.query, keep_blank_values=True)
     values = parameters.get("uddg")
     if not values:
         return url
-
     target = values[0]
     for _ in range(3):
-        decoded = urllib.parse.unquote(target)
+        decoded = brisart_unquote(target)
         if decoded == target:
             break
         target = decoded
@@ -385,56 +288,36 @@ def _decode_duckduckgo_target(url: str) -> str:
 
 
 def _decode_bing_target(url: str) -> str:
-    """Unwrap Bing's /ck/a click-tracking redirect wrapper.
-
-    Bing wraps organic result links as
-    https://www.bing.com/ck/a?...&u=a1<base64url>&..., where the `u`
-    parameter's value is prefixed with a short encoding tag ("a1")
-    followed by URL-safe base64 without padding. Returns the original
-    URL unchanged if unwrapping fails for any reason.
-    """
+    """Unwrap Bing's /ck/a click-tracking redirect wrapper."""
     try:
-        parsed = urllib.parse.urlsplit(url)
+        parsed = brisart_urlsplit(url)
     except ValueError:
         return url
-
     if "bing.com" not in parsed.netloc.casefold():
         return url
     if not parsed.path.casefold().endswith("/ck/a"):
         return url
-
-    parameters = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    parameters = _parse_qs(parsed.query, keep_blank_values=True)
     values = parameters.get("u")
     if not values:
         return url
-
     encoded = values[0]
     if not encoded[2:]:
         return url
     payload = encoded[2:] if len(encoded) > 2 else encoded
     padding = "=" * (-len(payload) % 4)
-
     try:
-        decoded_bytes = base64.urlsafe_b64decode(payload + padding)
+        decoded_bytes = brisart_urlsafe_b64decode(payload + padding)
         decoded = decoded_bytes.decode("utf-8", errors="replace")
     except Exception:
         return url
-
     return decoded if decoded.startswith(("http://", "https://")) else url
 
 
 def _strip_embedded_markup(text: str) -> str:
-    """Best-effort extraction of an href value from stray HTML.
-
-    Search result text should already be a bare URL. If a provider ever
-    hands back a whole anchor tag as the value instead, pull the real
-    destination out of the href="..." attribute rather than treating the
-    markup blob as the URL itself.
-    """
     candidate = str(text or "").strip()
     if "<" not in candidate or "href" not in candidate.casefold():
         return candidate
-
     marker = "href="
     lowered = candidate.casefold()
     start = lowered.find(marker)
@@ -453,31 +336,26 @@ def _strip_embedded_markup(text: str) -> str:
 
 
 def _normalize_result_url(href: str, base_url: str) -> str:
-    candidate = html.unescape(_strip_embedded_markup(href))
+    candidate = brisart_unescape(_strip_embedded_markup(href))
     if not candidate:
         return ""
-
     lowered = candidate.casefold()
     if lowered.startswith(_IGNORED_SCHEMES):
         return ""
-
     if candidate.startswith("//"):
         candidate = "https:" + candidate
     else:
-        candidate = urllib.parse.urljoin(base_url, candidate)
-
+        candidate = brisart_urljoin(base_url, candidate)
     candidate = _decode_duckduckgo_target(candidate)
     candidate = _decode_bing_target(candidate)
     candidate = _remove_tracking_parameters(candidate)
     candidate = normalize_url(candidate)
     if not candidate:
         return ""
-
     try:
-        parsed = urllib.parse.urlsplit(candidate)
+        parsed = brisart_urlsplit(candidate)
     except ValueError:
         return ""
-
     if parsed.scheme not in {"http", "https"}:
         return ""
     if not parsed.hostname:
@@ -486,17 +364,10 @@ def _normalize_result_url(href: str, base_url: str) -> str:
         return ""
     if is_blocked_web_host(candidate):
         return ""
-
     return candidate
 
 
 def _deduplicate(results: Sequence[Tuple[str, str]], limit: int) -> List[Tuple[str, str]]:
-    """Deduplicate (url, title) pairs, preserving order.
-
-    Titles ride along so provider-level relevance checks can inspect
-    displayed result text, and so with_titles=True callers get real
-    titles for title-aware ranking downstream.
-    """
     deduplicated: List[Tuple[str, str]] = []
     seen = set()
     for url, title in results:
@@ -521,13 +392,11 @@ def _parse_html_results(raw_html: str, base_url: str, limit: int) -> List[Tuple[
     except Exception as exc:
         print(f"WARN: could not parse search HTML: {exc}")
         return []
-
     candidates: List[Tuple[str, str]] = []
     for href, visible_text in parser.links:
         result_url = _normalize_result_url(href, base_url)
         if result_url:
             candidates.append((result_url, visible_text))
-
     return _deduplicate(candidates, limit)
 
 
@@ -552,17 +421,7 @@ def _search_duckduckgo_lite(query: str, limit: int) -> List[Tuple[str, str]]:
 
 
 def _search_bing_html(query: str, limit: int) -> List[Tuple[str, str]]:
-    """Scrape Bing's plain organic HTML results page.
-
-    Bing dropped its public format=rss output for organic web search;
-    requesting it can silently fall back to an unrelated dictionary
-    vertical instead of real results. Scraping the normal HTML results
-    page -- same technique as the DuckDuckGo providers above -- is the
-    reliable, dependency-free option instead.
-    """
-    raw_html = _http_get(
-        BING_SEARCH_URL, {"q": query, "count": "10", "setlang": "en-US", "mkt": "en-US"},
-    )
+    raw_html = _http_get(BING_SEARCH_URL, {"q": query, "count": "10", "setlang": "en-US", "mkt": "en-US"})
     if not raw_html:
         return []
     if _looks_blocked(raw_html):
@@ -571,38 +430,18 @@ def _search_bing_html(query: str, limit: int) -> List[Tuple[str, str]]:
     return _parse_html_results(raw_html, BING_SEARCH_URL, limit)
 
 
-# -----------------------------------------------------------------------
-# Mojeek / Brave Search / Startpage
-# -----------------------------------------------------------------------
-# Implemented directly in this file rather than a companion module --
-# a previous split caused a real startup crash when a companion module
-# existed on disk but was accidentally left empty, and this module's
-# top-level import from it raised ImportError before the app could even
-# start. Keeping every provider in one file means there's nothing else
-# that needs to exist and nothing else to keep in sync.
-
 _CHROME_HOST_FRAGMENTS: Tuple[str, ...] = (
-    "help.", "support.", "accounts.", "account.", "login.",
-    "static.", "cdn.", "assets.",
+    "help.", "support.", "accounts.", "account.", "login.", "static.", "cdn.", "assets.",
 )
-
 _CHALLENGE_MARKERS: Tuple[str, ...] = (
-    "verify you are human", "unusual traffic", "are you a robot",
-    "captcha", "access denied", "attention required",
-    "checking your browser", "cf-challenge", "before you continue",
-    "consent.google", "please enable cookies",
+    "verify you are human", "unusual traffic", "are you a robot", "captcha",
+    "access denied", "attention required", "checking your browser",
+    "cf-challenge", "before you continue", "consent.google", "please enable cookies",
 )
 
 
 @dataclass
 class WebResult:
-    """One normalized search result from an extra provider.
-
-    A small dataclass purely for readability at the call sites below;
-    converted to this module's plain (url, title) tuple contract via
-    _adapt_extra_provider() before merging with the other providers.
-    """
-
     title: str
     url: str
     snippet: str = ""
@@ -610,26 +449,12 @@ class WebResult:
 
 @dataclass
 class ProviderOutcome:
-    """Result of one extra-provider attempt, with a debug note.
-
-    `results` is empty on any failure (network error, challenge page,
-    zero parsed results); callers treat that as "fall through to the
-    next provider," same as the DuckDuckGo HTML/Lite handling.
-    """
-
     results: List[WebResult] = field(default_factory=list)
     debug_note: str = ""
 
 
-class _ResultLinkTextParser(HTMLParser):
-    """Generic, markup-agnostic search-result link extractor.
-
-    Collects every outbound <a href> together with its inner text (a
-    title candidate) and a short run of trailing plain text (a snippet
-    candidate). Deciding which of these are genuine results happens
-    afterward in _extract_result_links() -- this class only records raw
-    candidates.
-    """
+class _ResultLinkTextParser(BrisartMarkupParser):
+    """Generic, markup-agnostic search-result link extractor."""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -684,13 +509,11 @@ class _ResultLinkTextParser(HTMLParser):
 
 
 def _looks_like_challenge_page(raw_html: str) -> bool:
-    """Heuristically detect a bot-challenge/consent page."""
     prefix = raw_html[:4000].casefold()
     return any(marker in prefix for marker in _CHALLENGE_MARKERS)
 
 
 def _is_chrome_link(candidate_host: str, engine_host: str) -> bool:
-    """True when a link is the engine's own site chrome, not a result."""
     if not candidate_host:
         return True
     if candidate_host == engine_host or candidate_host.endswith("." + engine_host):
@@ -699,25 +522,18 @@ def _is_chrome_link(candidate_host: str, engine_host: str) -> bool:
 
 
 def _extract_result_links(raw_html: str, engine_host: str, limit: int) -> List[WebResult]:
-    """Pull likely external result links out of a fetched results page.
-
-    See the module docstring for why this avoids hardcoded CSS
-    selectors. Deduplicates by URL and stops once `limit` results have
-    been collected.
-    """
     parser = _ResultLinkTextParser()
     try:
         parser.feed(raw_html)
         parser.close()
     except Exception:
         return []
-
     results: List[WebResult] = []
     seen_urls = set()
     for href, title, snippet in parser.candidates:
         if not href or not href.startswith(("http://", "https://")):
             continue
-        parsed = urllib.parse.urlparse(href)
+        parsed = brisart_urlsplit(href)
         host = parsed.netloc.casefold()
         if _is_chrome_link(host, engine_host):
             continue
@@ -735,7 +551,6 @@ def _extract_result_links(raw_html: str, engine_host: str, limit: int) -> List[W
 
 
 def _fetch_extra_provider(url: str) -> str:
-    """Fetch a URL's raw HTML with a realistic browser User-Agent."""
     request = urllib.request.Request(url, headers=_request_headers())
     with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
         raw_bytes = response.read(MAX_PAGE_BYTES + 1)
@@ -745,7 +560,6 @@ def _fetch_extra_provider(url: str) -> str:
 
 
 def _run_extra_provider(provider_label: str, search_url: str, engine_host: str, limit: int) -> ProviderOutcome:
-    """Shared fetch/challenge-detect/parse flow for one extra provider."""
     try:
         raw_html = _fetch_extra_provider(search_url)
     except urllib.error.HTTPError as exc:
@@ -756,56 +570,40 @@ def _run_extra_provider(provider_label: str, search_url: str, engine_host: str, 
         return ProviderOutcome(debug_note=f"WARN: {provider_label} request failed ({exc}).")
 
     if _looks_like_challenge_page(raw_html):
-        return ProviderOutcome(
-            debug_note=f"WARN: {provider_label} returned a challenge or consent page."
-        )
+        return ProviderOutcome(debug_note=f"WARN: {provider_label} returned a challenge or consent page.")
 
     results = _extract_result_links(raw_html, engine_host, limit)
     if not results:
         return ProviderOutcome(
-            debug_note=(
-                f"WARN: {provider_label} returned no usable results "
-                f"(fetched {len(raw_html)} chars)."
-            )
+            debug_note=f"WARN: {provider_label} returned no usable results (fetched {len(raw_html)} chars)."
         )
     return ProviderOutcome(results=results, debug_note=f"{provider_label}: {len(results)} result(s) parsed.")
 
 
 def _mojeek_provider(query: str, limit: int = 5) -> ProviderOutcome:
-    """Search Mojeek (mojeek.com), an independent, script-light index."""
-    encoded_query = urllib.parse.quote_plus(query)
+    encoded_query = _quote_plus(query)
     search_url = f"{MOJEEK_SEARCH_URL}?q={encoded_query}"
     return _run_extra_provider("Mojeek", search_url, "www.mojeek.com", limit)
 
 
 def _brave_provider(query: str, limit: int = 5) -> ProviderOutcome:
-    """Search Brave Search (search.brave.com). High risk of blocking."""
-    encoded_query = urllib.parse.quote_plus(query)
+    encoded_query = _quote_plus(query)
     search_url = f"{BRAVE_SEARCH_URL}?q={encoded_query}"
     return _run_extra_provider("Brave Search", search_url, "search.brave.com", limit)
 
 
 def _startpage_provider(query: str, limit: int = 5) -> ProviderOutcome:
-    """Search Startpage (startpage.com). Highest risk of blocking."""
-    encoded_query = urllib.parse.quote_plus(query)
+    encoded_query = _quote_plus(query)
     search_url = f"{STARTPAGE_SEARCH_URL}?query={encoded_query}"
     return _run_extra_provider("Startpage", search_url, "www.startpage.com", limit)
 
 
 def _adapt_extra_provider(provider_fn, query: str, limit: int) -> List[Tuple[str, str]]:
-    """Bridge a Mojeek/Brave/Startpage provider into this module's (url, title) contract.
-
-    Every result is re-run through _normalize_result_url() so these
-    providers get the same tracking-parameter stripping, search-host
-    filtering, and dictionary blocklist check as DuckDuckGo/Bing/
-    Wikipedia results.
-    """
     outcome = provider_fn(query, limit=limit)
     if outcome.debug_note and not outcome.results:
         print(outcome.debug_note)
     if not outcome.results:
         return []
-
     normalized: List[Tuple[str, str]] = []
     for result in outcome.results:
         cleaned_url = _normalize_result_url(result.url, result.url)
@@ -815,33 +613,24 @@ def _adapt_extra_provider(provider_fn, query: str, limit: int) -> List[Tuple[str
 
 
 def _search_startpage(query: str, limit: int) -> List[Tuple[str, str]]:
-    """Tried first: most aggressive bot-detection, least-documented markup."""
     return _adapt_extra_provider(_startpage_provider, query, limit)
 
 
 def _search_brave(query: str, limit: int) -> List[Tuple[str, str]]:
-    """Tried second: heavy bot-detection and frequently-changing markup."""
     return _adapt_extra_provider(_brave_provider, query, limit)
 
 
 def _search_mojeek(query: str, limit: int) -> List[Tuple[str, str]]:
-    """Independent index, historically the most scraper-tolerant of the six HTML providers."""
     return _adapt_extra_provider(_mojeek_provider, query, limit)
 
 
 def _search_wikipedia_api(query: str, limit: int) -> List[Tuple[str, str]]:
-    """Search Wikipedia through its documented public JSON API.
-
-    Runs last as a floor on quality -- a stable, key-free endpoint that
-    keeps working under exactly the conditions that break the scrapers
-    above it, at the cost of covering only encyclopedic topics.
-    """
-    request_url = WIKIPEDIA_API_URL + "?" + urllib.parse.urlencode(
-        {
-            "action": "query", "list": "search", "srsearch": query,
-            "srlimit": str(max(1, min(int(limit), 50))),
-            "srnamespace": "0", "format": "json",
-        }
+    request_url = WIKIPEDIA_API_URL + "?" + brisart_urlencode(
+        [
+            ("action", "query"), ("list", "search"), ("srsearch", query),
+            ("srlimit", str(max(1, min(int(limit), 50)))),
+            ("srnamespace", "0"), ("format", "json"),
+        ]
     )
     request = urllib.request.Request(
         request_url,
@@ -853,7 +642,7 @@ def _search_wikipedia_api(query: str, limit: int) -> List[Tuple[str, str]]:
     )
     try:
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
-            payload = json.loads(_read_response(response))
+            payload = brisart_loads(_read_response(response))
     except urllib.error.HTTPError as exc:
         print(f"WARN: Wikipedia API returned HTTP {exc.code}")
         return []
@@ -866,13 +655,11 @@ def _search_wikipedia_api(query: str, limit: int) -> List[Tuple[str, str]]:
     except Exception as exc:
         print(f"WARN: Wikipedia API request failed: {exc}")
         return []
-
     try:
         matches = payload["query"]["search"]
     except (KeyError, TypeError):
         print("WARN: Wikipedia API response contained no search results.")
         return []
-
     candidates: List[Tuple[str, str]] = []
     for match in matches:
         if not isinstance(match, dict):
@@ -880,7 +667,7 @@ def _search_wikipedia_api(query: str, limit: int) -> List[Tuple[str, str]]:
         title = str(match.get("title") or "").strip()
         if not title:
             continue
-        article_url = WIKIPEDIA_ARTICLE_BASE + urllib.parse.quote(title.replace(" ", "_"), safe="")
+        article_url = WIKIPEDIA_ARTICLE_BASE + brisart_quote(title.replace(" ", "_"), safe="")
         normalized = _normalize_result_url(article_url, WIKIPEDIA_ARTICLE_BASE)
         if normalized:
             candidates.append((normalized, title))
@@ -890,15 +677,7 @@ def _search_wikipedia_api(query: str, limit: int) -> List[Tuple[str, str]]:
 def search_public_web(
     query: str, limit: int = 5, with_titles: bool = False,
 ) -> Union[List[str], List[Tuple[str, str]]]:
-    """Search public providers and return normalized results.
-
-    Default (`with_titles=False`) returns a plain list[str] of URLs, as
-    before -- every existing caller keeps working unchanged. With
-    `with_titles=True`, returns list[tuple[str, str]] of (url, title)
-    pairs, preserving each provider's displayed anchor text --
-    web/crawler.py uses this to fold a result's title into its
-    relevance scoring alongside the URL.
-    """
+    """Search public providers and return normalized results."""
     cleaned_query = " ".join(str(query or "").split())
     if not cleaned_query:
         print("WARN: public web search received an empty query.")
@@ -910,8 +689,6 @@ def search_public_web(
         result_limit = 5
 
     providers = (
-        # Ordered from MOST likely to be blocked to LEAST likely -- see
-        # module docstring.
         ("Startpage", _search_startpage),
         ("Brave Search", _search_brave),
         ("DuckDuckGo HTML", _search_duckduckgo_html),
@@ -926,14 +703,12 @@ def search_public_web(
         remaining = result_limit - len(collected)
         if remaining <= 0:
             break
-
         print(f"WEB SEARCH: trying {provider_name}")
         try:
             provider_results = provider(cleaned_query, remaining)
         except Exception as exc:
             print(f"WARN: {provider_name} search failed: {exc}")
             continue
-
         if not provider_results:
             print(f"WARN: {provider_name} returned no usable results.")
             continue
@@ -943,8 +718,7 @@ def search_public_web(
             print(
                 f"WARN: {provider_name} returned {len(provider_results)} "
                 "result(s) unrelated to the query (likely a throttled or "
-                "decoy response); discarding them and trying the next "
-                "provider."
+                "decoy response); discarding them and trying the next provider."
             )
             continue
         if unrelated_results:

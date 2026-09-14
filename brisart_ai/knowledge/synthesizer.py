@@ -4,63 +4,23 @@ File: brisart_ai/knowledge/synthesizer.py
 Purpose
 -------
 Turns ranked documents into an answer by extracting the most relevant
-sentences and presenting them directly, followed by a plain source
-list. No "Observation:", "Confidence:", "Why I think this:", or
-"Suggested next move:" scaffolding -- just the information.
-
-A question's phrasing hints at the KIND of sentence that answers it,
-not just its topic words. Query classification is delegated entirely to
-brisart_ai.intent's detect_intent() (the same classifier web search and
-offline ranking use) via three thin wrappers, so there's exactly one
-place in the codebase deciding what kind of question a query is:
-statistic ("how many," "population," "percent") boosts sentences
-containing an actual numeric quantity; comparison ("vs," "outlive,"
-"better than") boosts sentences with comparative language; explanation
-("why...") boosts sentences with causal language ("because," "due to,"
-"caused by"). This is what stops "do dogs outlive cats" from returning a
-generic sentence about working dog breeds, and instead prefers a
-sentence that actually compares dog and cat lifespans.
+sentences and presenting them directly, followed by a plain source list.
 
 Communication / relationships
 ------------------------------
-- brisart_ai/core/conversation.py: build_conversation_answer() calls
-  synthesize() as the final step once ranked documents exist.
+- brisart_ai/core/conversation.py: calls synthesize().
 - Imports brisart_ai.intent.{INTENT_COMPARISON, INTENT_EXPLANATION,
-  INTENT_STATISTIC, detect_intent} and brisart_ai.util.{split_sentences,
-  tokenize}.
+  INTENT_STATISTIC, detect_intent} and brisart_ai.util.{split_sentences, tokenize}.
 
 Settings / parameters
 ----------------------
-- max_sources (default 6) / max_sentences (default 10): caps on how many
-  ranked documents are scanned for candidate sentences and how many
-  sentences the final answer quotes.
-- _HAS_QUANTITY: a digit-plus-scale/unit-word pattern covering currency,
-  population/demographic units, distance, mass, and time, used to detect
-  a genuinely numeric sentence for statistic-intent questions.
-- _HAS_COMPARISON_SIGNAL / _HAS_REASON_SIGNAL: comparative-language and
-  causal-language patterns for comparison/explanation-intent questions.
-- recent_topics: accepted but not yet used in scoring; it exists so
-  core/conversation.py can pass session-memory context without a future
-  signature change once that context is put to use.
+- max_sources (6) / max_sentences (10).
+- _HAS_QUANTITY / _HAS_COMPARISON_SIGNAL / _HAS_REASON_SIGNAL.
 
 Edge cases
 ----------
-- These boosts only apply to sentences that already share at least one
-  query term, so an unrelated sentence never gets surfaced just for
-  containing the word "because."
-- Chosen sentences are de-duplicated by a normalized key
-  (_deduplication_key()), so near-identical text repeated across
-  multiple crawled pages of the same article collapses to one.
-- When a quantity/comparison/reason signal is detected, chosen sentences
-  are re-sorted so ANY matching sentence sorts before ANY non-matching
-  one, regardless of raw score -- the single most useful sentence (a
-  real number, a real comparison) leads the answer.
-- Citations are renumbered sequentially in first-appearance order among
-  kept sentences, so a removed duplicate never leaves a gap.
-- An empty docs list returns a fixed "I don't have any indexed
-  information..." message; a non-empty docs list with zero scoring
-  sentences returns a distinct "I found related sources, but..."
-  message, so the two different failure causes are never conflated.
+- Boosts only apply to sentences sharing at least one query term.
+- Chosen sentences de-duplicated by normalized key.
 """
 from __future__ import annotations
 
@@ -68,12 +28,7 @@ import collections
 import re
 from typing import Dict, Iterable, List, Set, Tuple
 
-from brisart_ai.intent import (
-    INTENT_COMPARISON,
-    INTENT_EXPLANATION,
-    INTENT_STATISTIC,
-    detect_intent,
-)
+from brisart_ai.intent import INTENT_COMPARISON, INTENT_EXPLANATION, INTENT_STATISTIC, detect_intent
 from brisart_ai.util import split_sentences, tokenize
 
 Document = Dict[str, object]
@@ -81,28 +36,20 @@ Candidate = Tuple[float, int, str, Document]
 
 
 def query_wants_quantity(query: str) -> bool:
-    """True when the query is asking for a count or measure."""
     return detect_intent(query) == INTENT_STATISTIC
 
 
 def query_wants_comparison(query: str) -> bool:
-    """True when the query is asking to compare two things."""
     return detect_intent(query) == INTENT_COMPARISON
 
 
 def query_wants_reason(query: str) -> bool:
-    """True when the query is a "why"/explanation question."""
     return detect_intent(query) == INTENT_EXPLANATION
 
 
 _HAS_DIGIT = re.compile(r"\d")
-
-# A digit followed by a scale/unit word -- strong evidence a sentence
-# states an actual quantity. Extended past the original population-only
-# set to also cover currency, distance, mass, and time, since a
-# statistic question's answer isn't always a population count.
 _HAS_QUANTITY = re.compile(
-    r"[$€£]\s*\d[\d,\.]*"
+    r"[$\u20ac\u00a3]\s*\d[\d,\.]*"
     r"|\d[\d,\.]*\s*"
     r"(million|billion|trillion|thousand|percent|%|households|"
     r"people|cats|dogs|pets|residents|adults|users|"
@@ -113,7 +60,6 @@ _HAS_QUANTITY = re.compile(
     r"calories|degrees)",
     re.IGNORECASE,
 )
-
 _HAS_COMPARISON_SIGNAL = re.compile(
     r"\b(than|more|less|longer|shorter|faster|slower|"
     r"better|worse|compared\s+to|versus|vs\.?|"
@@ -122,7 +68,6 @@ _HAS_COMPARISON_SIGNAL = re.compile(
     r"most|least|stronger|weaker)\b",
     re.IGNORECASE,
 )
-
 _HAS_REASON_SIGNAL = re.compile(
     r"\b(because|due\s+to|caused?\s+by|reason|since|"
     r"as\s+a\s+result|leads?\s+to|results?\s+in|"
@@ -139,7 +84,6 @@ def _clean_sentence(sentence: str) -> str:
 
 
 def format_source(document: Document) -> str:
-    """Format a source reference for display."""
     source_type = str(document.get("source_type", "source"))
     location = str(document.get("location", ""))
     title = str(document.get("title") or location or "Untitled source")
@@ -151,25 +95,17 @@ def _deduplication_key(sentence: str) -> str:
 
 
 def sentence_score(
-    sentence: str,
-    query_terms: Set[str],
-    quantity_mode: bool = False,
-    comparison_mode: bool = False,
-    reason_mode: bool = False,
+    sentence: str, query_terms: Set[str], quantity_mode: bool = False,
+    comparison_mode: bool = False, reason_mode: bool = False,
 ) -> float:
-    """Score a sentence by query-term overlap, density, and intent match."""
     words = tokenize(sentence)
     if not words:
         return 0.0
-
     counts = collections.Counter(words)
     overlap = sum(counts[term] for term in query_terms)
     density = overlap / max(1, len(words))
     score = float(overlap + density)
 
-    # Intent boosts only apply when the sentence is at least somewhat
-    # on-topic, so an unrelated sentence never gets surfaced just for
-    # containing the word "because."
     if overlap > 0:
         if quantity_mode:
             if _HAS_QUANTITY.search(sentence):
@@ -180,32 +116,21 @@ def sentence_score(
             score += 8.0
         if reason_mode and _HAS_REASON_SIGNAL.search(sentence):
             score += 8.0
-
     return score
 
 
 def synthesize(
-    query: str,
-    docs: List[Document],
-    max_sources: int = 6,
-    max_sentences: int = 10,
+    query: str, docs: List[Document], max_sources: int = 6, max_sentences: int = 10,
     recent_topics: Iterable[str] | None = None,
 ) -> str:
-    """Return the most relevant information from ranked documents.
-
-    Output is just the answer text followed by a plain source list --
-    no reasoning narration or confidence labels. `recent_topics` is
-    accepted but not yet used in scoring; it exists so
-    core/conversation.py can pass session-memory context without a
-    future signature change once that context is put to use.
-    """
+    """Return the most relevant information from ranked documents."""
     if not docs:
         return "I don't have any indexed information that answers that yet."
 
     safe_source_limit = max(1, int(max_sources))
     safe_sentence_limit = max(1, int(max_sentences))
-
     query_terms = set(tokenize(query))
+
     quantity_mode = query_wants_quantity(query)
     comparison_mode = query_wants_comparison(query)
     reason_mode = query_wants_reason(query)
@@ -215,10 +140,8 @@ def synthesize(
         text = str(document.get("text", ""))
         for sentence in split_sentences(text):
             score = sentence_score(
-                sentence, query_terms,
-                quantity_mode=quantity_mode,
-                comparison_mode=comparison_mode,
-                reason_mode=reason_mode,
+                sentence, query_terms, quantity_mode=quantity_mode,
+                comparison_mode=comparison_mode, reason_mode=reason_mode,
             )
             if score > 0:
                 candidates.append((score, source_number, sentence, document))
@@ -243,10 +166,6 @@ def synthesize(
             "passage that directly answers that."
         )
 
-    # Lead with the single best sentence matching the detected intent
-    # (a real number, a real comparison, a real reason), rather than a
-    # merely higher-overlap but less useful one. Priority: quantity,
-    # then comparison, then reason.
     if quantity_mode:
         signal_re = _HAS_QUANTITY
     elif comparison_mode:
@@ -259,8 +178,6 @@ def synthesize(
     if signal_re is not None:
         chosen.sort(key=lambda item: (0 if signal_re.search(item[2]) else 1, -item[0]))
 
-    # Group by source and assign sequential display numbers so
-    # citations read 1, 2, 3 with no gaps.
     by_source: Dict[int, List[str]] = collections.defaultdict(list)
     original_docs: Dict[int, Document] = {}
     order: List[int] = []
@@ -282,19 +199,12 @@ def synthesize(
 
     lines.append("Sources:")
     for original_number in order:
-        lines.append(
-            f"[{display_number[original_number]}] "
-            f"{format_source(original_docs[original_number])}"
-        )
+        lines.append(f"[{display_number[original_number]}] {format_source(original_docs[original_number])}")
 
     return "\n".join(lines).rstrip()
 
 
 __all__ = [
-    "format_source",
-    "query_wants_comparison",
-    "query_wants_quantity",
-    "query_wants_reason",
-    "sentence_score",
-    "synthesize",
+    "format_source", "query_wants_comparison", "query_wants_quantity",
+    "query_wants_reason", "sentence_score", "synthesize",
 ]
