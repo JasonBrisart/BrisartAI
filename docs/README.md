@@ -90,11 +90,11 @@ Each source package carries its own `README.md`; file-level docstrings own each 
 
 | Document | Owns |
 |---|---|
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System design, request flow, storage model, "where do I change X?" |
-| [`docs/TESTING.md`](docs/TESTING.md) | Test layout, commands, scope |
-| [`docs/SECURITY.md`](docs/SECURITY.md) | Private vulnerability reporting, security scope, air-gapped policy |
-| [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) | Open and resolved issues (standardized bug-report format) |
-| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | Full release history |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | System design, request flow, storage model, "where do I change X?" |
+| [`TESTING.md`](TESTING.md) | Test layout, commands, scope |
+| [`SECURITY.md`](SECURITY.md) | Private vulnerability reporting, security scope, air-gapped policy |
+| [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) | Open and resolved issues (standardized bug-report format) |
+| [`CHANGELOG.md`](CHANGELOG.md) | Full release history |
 | [`brisart_ai/native/README.md`](brisart_ai/native/README.md) | The Brisart Native Stack and its verification |
 
 Each fact has exactly one authoritative home — this README points to it rather than duplicating it. Security details are in `SECURITY.md`; the honest limitations list is in `KNOWN_ISSUES.md`; supported file types are documented in [`brisart_ai/io/README.md`](brisart_ai/io/README.md).
