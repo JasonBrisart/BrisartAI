@@ -1,37 +1,108 @@
-# Documentation Index
+# BrisartAI
 
-This folder holds BrisartAI's **durable** documentation — the things that need a stable home and shouldn't drift into the code.
+**Local research intelligence. Pure Python. Local-first. Dependency-free.**
 
-Two kinds of documentation live elsewhere and are deliberately *not* duplicated here:
+BrisartAI is a desktop research assistant that turns local files, notes, code, and — when you allow it — public web material into a **searchable, source-grounded knowledge system**. It finds the evidence you already have, ranks it, and quotes it back with citations. It does not invent facts, and it does not phone home.
 
-- **Project orientation** (what BrisartAI is, how to run it, capabilities, layout) lives in the root [`README.md`](../README.md).
-- **Per-package technical references** live as a `README.md` inside each `brisart_ai/` subfolder, beside the code they describe.
+Built for researchers, developers, archivists, and labs that want inspectable research infrastructure with **no hosted backend, no proprietary AI API, no telemetry, and no third-party package chain**. It runs on ordinary workstations and in offline / air-gapped environments.
 
-## What's in this folder
+---
 
-| Document | What it's for |
+## At a glance
+
+| | |
 |---|---|
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Macro-to-micro system design: layer responsibilities, request flow, storage schema, the ranking pipeline, and a "where do I make a change?" map. |
-| [`SECURITY.md`](SECURITY.md) | How to privately report a vulnerability, response expectations, security scope, and the air-gapped / local-data operating policy. |
-| [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) | Every open, non-trivial issue in a standardized bug-report format, plus a durable log of resolved issues. |
-| [`TESTING.md`](TESTING.md) | Test-suite layout, how to run it, why `pytest` is the runner, and what's deliberately out of scope. |
-| [`CHANGELOG.md`](CHANGELOG.md) | Full release history, newest first. |
+| **Run it** | `python run.py` |
+| **Interface** | Local Tkinter desktop app (GUI-only) |
+| **Storage** | Local SQLite |
+| **Runtime dependencies** | Python standard library only |
+| **Network** | Optional; fully disableable for air-gapped use |
+| **Author** | Jason Brisart — Brisart research tooling ecosystem |
 
-## Where to start
+## What it does
 
-If you're new to the project, read the root [`README.md`](../README.md) first, then [`ARCHITECTURE.md`](ARCHITECTURE.md). From there, open the `README.md` inside whichever `brisart_ai/` package you need to work in, and finally the top-of-file docstring of the specific module you're changing.
+- **Indexes local material** — notes, Markdown/text, source code, structured data, and Office/PDF documents — into a local SQLite store.
+- **Answers from evidence** — retrieves the best passages and quotes them back with sources. When the evidence is thin, it says so.
+- **Searches the public web (optional)** — only when you enable it; otherwise everything works locally with zero outbound requests.
+- **Ranks with the Brisart Relevance Engine** — a custom, inspectable, non-TF-IDF/BM25 pipeline that ranks a source because it's likely to *answer the question*, not just repeat its words.
 
-## Documentation ownership
+---
 
-To prevent drift, each fact has exactly one authoritative home:
+## Quick start
 
-- **Root `README.md`** — orientation, capabilities, setup, repository layout.
-- **`docs/ARCHITECTURE.md`** — detailed design and change-location guidance.
-- **`docs/TESTING.md`** — test policy and authoritative commands.
-- **`docs/SECURITY.md`** — vulnerability reporting and security policy.
-- **`docs/KNOWN_ISSUES.md`** — open and resolved issue records.
-- **`docs/CHANGELOG.md`** — release history.
-- **Package `README.md`** — module responsibilities and boundaries.
-- **File docstrings** — implementation contracts, parameters, relationships, edge cases.
+Requires a Python 3 install with Tkinter and write access in the working folder. No third-party packages needed.
 
-A summary may appear in more than one place. The *authoritative* version appears in only one.
+```bash
+python run.py        # or, on Windows: py run.py  /  start.bat
+```
+
+`run.py` opens the desktop app. Any startup failure (locked index, read-only folder) is caught and shown as a dialog, not a raw traceback.
+
+Then: add local material through the interface, let it index, and ask a question. Enable public web research only when appropriate for your environment. For air-gapped use, leave web research off and index only approved local material.
+
+---
+
+## How it works
+
+```text
+Local files + (optional) web pages
+        │  extract & clean            (io/)
+        ▼
+Local SQLite index                    (knowledge/index.py)
+        │  Brisart Relevance Engine   (knowledge/relevance_engine.py + ranker.py + intent.py)
+        ▼
+Evidence selection & synthesis        (knowledge/synthesizer.py)
+        ▼
+Source-grounded desktop UI            (ui/)
+```
+
+Full request flow, storage schema, the ranking pipeline, and a "where do I change X?" map live in **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**.
+
+BrisartAI also ships the **Brisart Native Stack** — pure-Python, from-spec reimplementations of the stdlib primitives it relies on (SHA-256, Base64, DEFLATE, URL/JSON/HTML parsing, robots.txt), each verified against the stdlib and wired into production. Details and verification: **[`brisart_ai/native/README.md`](brisart_ai/native/README.md)**.
+
+---
+
+## Repository layout
+
+```text
+BrisartAI/
+├── brisart_ai/
+│   ├── core/        Conversation routing, session memory, settings
+│   ├── io/          Readers, extraction, input cleaning
+│   ├── knowledge/   Indexing, ranking, relevance, synthesis, vault
+│   ├── native/      The Brisart Native Stack
+│   ├── ui/          Tkinter interface + service boundary
+│   ├── web/         Optional public web research
+│   ├── blocklist.py / intent.py / util.py / version_info.py   Shared layer
+│   └── tests/       Tests for the shared modules (each package has its own tests/)
+├── data/            Local configuration (research_settings.json)
+├── docs/            Durable project documentation (see below)
+├── scripts/         Diagnostic ranking-replay utilities
+├── run.py           Application launcher
+└── version.py       Canonical release version
+```
+
+Each source package carries its own `README.md`; file-level docstrings own each module's contract, parameters, relationships, and edge cases.
+
+---
+
+## Documentation
+
+| Document | Owns |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System design, request flow, storage model, "where do I change X?" |
+| [`docs/TESTING.md`](docs/TESTING.md) | Test layout, commands, scope |
+| [`docs/SECURITY.md`](docs/SECURITY.md) | Private vulnerability reporting, security scope, air-gapped policy |
+| [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) | Open and resolved issues (standardized bug-report format) |
+| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | Full release history |
+| [`brisart_ai/native/README.md`](brisart_ai/native/README.md) | The Brisart Native Stack and its verification |
+
+Each fact has exactly one authoritative home — this README points to it rather than duplicating it. Security details are in `SECURITY.md`; the honest limitations list is in `KNOWN_ISSUES.md`; supported file types are documented in [`brisart_ai/io/README.md`](brisart_ai/io/README.md).
+
+---
+
+## Licensing & author
+
+Released under the **Brisart Ecosystem License** — official releases are free for operational use; modification/forking/commercialization rights require an active subscription (see the repository's license terms for the authoritative details).
+
+Created and maintained by **Jason Brisart** as part of the Brisart research tooling ecosystem.
