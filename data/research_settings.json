@@ -1,5 +1,5 @@
 {
-  "auto_web_research": false,
+  "auto_web_research": true,
   "search_local_files": true,
   "search_notes": true
 }
