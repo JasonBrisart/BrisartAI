@@ -237,7 +237,7 @@ def _partition_related_results(
     """Split provider results into (related, unrelated), judged per-result."""
     terms = {
         word for word in re.findall(r"[a-z0-9]+", str(query or "").casefold())
-        if len(word) > 3 and word not in FUNCTION_WORDS
+        if len(word) > 2 and word not in FUNCTION_WORDS
     }
     if not terms:
         return list(results), []
@@ -245,11 +245,22 @@ def _partition_related_results(
     related: List[Tuple[str, str]] = []
     unrelated: List[Tuple[str, str]] = []
     for url, title in results:
-        haystack = f"{url} {title}".casefold()
+        # Match on WHOLE-WORD boundaries, not raw substrings. A substring
+        # check falsely relates "war" to "warehouse", "tax" to "taxi",
+        # "won" to "wonderland", "end" to "friend", etc. -- exactly the
+        # off-topic decoys that used to slip through. Tokenize the URL +
+        # title into words and compare token-by-token, with a symmetric
+        # single-'s' plural fold so "cats" still matches "cat".
+        haystack_tokens = set(re.findall(r"[a-z0-9]+", f"{url} {title}".casefold()))
         matched = False
         for term in terms:
-            stem = term.rstrip("s")
-            if term in haystack or (len(stem) >= 3 and stem in haystack):
+            if term in haystack_tokens:
+                matched = True
+                break
+            # symmetric plural fold: term<->token differ only by a trailing 's'
+            if (term + "s") in haystack_tokens or (
+                term.endswith("s") and term[:-1] in haystack_tokens
+            ):
                 matched = True
                 break
         (related if matched else unrelated).append((url, title))
@@ -758,5 +769,7 @@ def search_public_web(
 
 
 __all__ = ["search_public_web"]
+
+
 
 

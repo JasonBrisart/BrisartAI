@@ -176,8 +176,66 @@ class TestPartitionRelatedResults(unittest.TestCase):
         self.assertEqual(len(related), 1)
         self.assertEqual(len(unrelated), 0)
 
+    def test_three_letter_subject_words_are_meaningful(self):
+        # Regression: a query whose only meaningful words are 3 letters
+        # ("won", "war", "ceo", "tax") must NOT collapse to an empty term
+        # set that waves every unrelated decoy through as "related".
+        garbage = [
+            ("https://example.com/cats", "The Cutest Cats of Instagram"),
+            ("https://shop.example.com/sale", "Huge Summer Sale"),
+            ("https://example.com/weather", "Local Weather Forecast"),
+        ]
+        for query in ("who won the war", "who is the ceo", "what is the tax"):
+            related, unrelated = _partition_related_results(query, garbage)
+            self.assertEqual(related, [], msg=f"{query!r} should drop all decoys")
+            self.assertEqual(len(unrelated), len(garbage))
+
+    def test_substring_false_positives_are_dropped(self):
+        # A short topic word must NOT relate a result just because it appears
+        # as a SUBSTRING of an unrelated word: "war" in "warehouse", "tax" in
+        # "taxi", "won" in "wonderland", "end" in "friend". Matching is on
+        # whole-word boundaries, not raw substrings.
+        cases = [
+            ("who won the war", ("https://x.com/a", "Amazon Warehouse Jobs")),
+            ("what is the tax rate", ("https://x.com/b", "Book a Taxi Online")),
+            ("who won the game", ("https://x.com/c", "Wonderland Theme Park")),
+            ("what year did it end", ("https://x.com/d", "Best Friend Gift Ideas")),
+        ]
+        for query, result in cases:
+            related, unrelated = _partition_related_results(query, [result])
+            self.assertEqual(related, [], msg=f"{query!r} must not match {result[1]!r} on a substring")
+            self.assertEqual(len(unrelated), 1)
+
+    def test_plural_fold_still_matches_whole_words(self):
+        # Word-boundary matching must still fold a single trailing 's' so a
+        # plural query term matches a singular document word and vice versa.
+        related, _ = _partition_related_results(
+            "how many cats are in america",
+            [("https://example.com/cat-population", "Pet Cat Population Statistics")],
+        )
+        self.assertEqual(len(related), 1)
+        related2, _ = _partition_related_results(
+            "history of the cat",
+            [("https://example.com/cats", "All About Cats")],
+        )
+        self.assertEqual(len(related2), 1)
+
+    def test_decoy_sharing_no_topic_word_is_dropped(self):
+        # "who won the 2020 election" must keep election results and drop a
+        # page that shares none of {won, 2020, election}.
+        batch = [
+            ("https://en.wikipedia.org/wiki/2020_United_States_presidential_election",
+             "2020 United States presidential election"),
+            ("https://example.com/cats", "The Cutest Cats of Instagram"),
+        ]
+        related, unrelated = _partition_related_results("who won the 2020 election", batch)
+        self.assertEqual([t for _, t in unrelated], ["The Cutest Cats of Instagram"])
+        self.assertEqual(len(related), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
 
 

@@ -4,6 +4,71 @@ All notable changes to BrisartAI are documented in this file, oldest release at 
 
 ---
 
+## [1.2.1] - 2026-09-16
+
+Fixes a web-search relevance bug that let genuinely off-topic pages ("not
+remotely related" results) reach ranking and, when the real sources were
+throttled or missing, be answered as though they were relevant. Two distinct
+root causes in the per-result relatedness filter
+(`brisart_ai/web/search.py::_partition_related_results`) are corrected. No other
+behavior changed; the fix is confined to which provider results are judged
+related to the query before ranking.
+
+### Fixed
+
+**Short-word queries collapsed the relatedness filter to a no-op.** The filter
+built the query's "meaningful words" with a `len(word) > 3` threshold, which
+silently discarded every three-letter subject word — *won, war, ceo, tax, gdp,
+law, pope, end*. For a question whose only meaningful words are three letters
+(e.g. "who won the 2020 election", "who won the war", "who is the ceo"), the
+term set came out **empty**, and the very next guard (`if not terms: return all
+as related`) then accepted **every** provider result unfiltered. When the
+HTML-scraping providers were throttled and returned decoy pages, those decoys
+were accepted, indexed, and answered — the "who won the 2020 election → bunk"
+report. The threshold is lowered to `len(word) > 2` so three-letter subject
+words count as meaningful; the existing function-word filter still drops
+`who/the/was/…`.
+
+**Relatedness was judged by raw substring, not whole words.** Even with a
+non-empty term set, a topic word was matched with a naive substring test, so a
+short word falsely related a result whenever it appeared *inside* an unrelated
+word: `war` in "ware**house**", `tax` in "**taxi**", `won` in "**won**derland",
+`end` in "fri**end**", `old` in "g**old**". These are exactly the off-topic
+decoys that slipped through. Matching now tokenizes the URL + title into whole
+words and compares token-by-token, with a symmetric single-`s` plural fold so
+legitimate plural/singular differences ("cats" ↔ "cat") still match. A result
+that shares no whole topic word with the query is now correctly partitioned out
+before ranking.
+
+### Verification
+
+- **Query battery:** a 15-query battery of common short-word questions ("who won
+  the 2020 election", "who won the war", "who is the ceo of apple", "what is the
+  gdp of japan", "what is the tax rate", "who is the pope", …) against a batch of
+  unrelated decoy pages now drops the decoys instead of accepting them.
+- **Substring probe:** "war" no longer relates to "Amazon Warehouse Jobs", "tax"
+  to "Book a Taxi Online", "won" to "Wonderland Theme Park", nor "end" to "Best
+  Friend Gift Ideas".
+- **Recall preserved:** real results are still kept — "who won the 2020 election"
+  keeps the Wikipedia election article, and the plural fold still relates "how
+  many cats" to a "Pet Cat Population Statistics" page.
+- **Test suite:** the co-located suite passes (`pytest --import-mode=importlib`),
+  including two new regression tests in `brisart_ai/web/tests/test_search.py`
+  (`test_substring_false_positives_are_dropped`,
+  `test_plural_fold_still_matches_whole_words`), plus the existing
+  short-word/decoy cases.
+
+### Known Limitations
+
+- Relatedness remains lexical: the plural fold treats a genuine morphological
+  form ("Summer Sale **Ends** Soon" for a query about when something "ended") as
+  a weak match, and a synonym/abbreviation gap ("ww2" vs "World War II") is not
+  bridged here. Both are inherent to whole-word lexical matching and are handled
+  downstream by ranking, which scores a lone weak-word match at the bottom; see
+  the standing web-ranking limitations (KI-002, KI-003, KI-006).
+
+---
+
 ## [1.2.0] - 2026-09-16
 
 Adds a substantial answer-quality layer to the retrieval pipeline — nine new
