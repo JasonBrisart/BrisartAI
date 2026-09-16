@@ -4,6 +4,103 @@ All notable changes to BrisartAI are documented in this file, oldest release at 
 
 ---
 
+## [1.2.5] - 2026-09-16
+
+Makes web research actually reachable from the chat box, restores the
+explicit "Research Web" action, and closes the largest way BrisartAI was
+silently accumulating junk in its local index: an off-topic page fetched
+from the internet could be indexed permanently, polluting every later
+query. Three related fixes across the conversation router, the service
+layer, and the crawler.
+
+### Fixed
+
+**Web research never actually ran from the chat box.**
+`core/conversation.py`'s only web-search branch is guarded by a
+`web_ingest is not None` check, and that parameter defaults to `None`.
+`ui/service.py`'s `ask()` forwarded `force_web`, `feedback`, and
+`citation_sink` but never passed `web_ingest`, so the guard was always
+false and the crawler (`web_search_and_ingest`, already imported in the
+service) was never called. The GUI still printed "Searching the public
+web..." because `ui/app.py` prints that line from the setting alone,
+independent of whether a fetch occurs -- which masked the dead wire.
+Fixed by passing `web_ingest=web_search_and_ingest` into
+`build_conversation_answer()`.
+
+**The "Research Web" action did nothing when the local index already
+matched, and a stale local page suppressed automatic web research.**
+`ui/service.py` collapsed the explicit "Research Web" action and the
+Automatic Web Research setting into a single `force_web` bool, and
+`build_conversation_answer()` only ran a web search when local search was
+*empty* (`if not docs and force_web`). Consequently the explicit action
+did nothing whenever any local page already matched the query
+(contradicting `docs/README.md`, which states the forced action always
+searches the web), and a single stale or marginal indexed page silently
+suppressed automatic web research for a typed question -- so answers were
+synthesized from that stale page instead of fresh results. Fixed by
+splitting the single gate into two independent flags forwarded separately:
+`force_web` (the explicit action -> always fetch, even when local matched)
+and `auto_web` (the setting -> fetch only when local search is empty).
+
+**Off-topic pages could be permanently ingested into the local index.**
+`web/crawler.py`'s `crawl_urls_to_index()` only rejected known-junk
+*hosts* (`is_junk_web_source`) before indexing; it never checked whether a
+fetched page's actual *content* was related to the query. When a search
+provider was throttled and returned decoy pages -- or an unrelated page
+otherwise slipped past host filtering -- that page was fetched, passed the
+host check, and was written into `brisart_ai_index.sqlite3` **permanently**,
+polluting every future query because the index persists across sessions
+(this was tracked as KI-002). Fixed by adding a positive content-relevance
+gate, `_page_is_on_topic()`, applied after fetch and before indexing: a
+page whose title + (bounded) body shares no whole-word, single-'s'
+plural-folded, or stemmed topic term with the query is dropped (counted as
+`CrawlStats.skipped_offtopic`) rather than indexed. The gate reuses the
+whole-word + plural-fold approach `web/search.py`'s
+`_partition_related_results()` already uses, extended with the crawler's
+own `_stem()`, and is permissive by construction -- it drops a page only
+when it matches *none* of those tests, so it can never drop a page that
+shares real topic vocabulary with the query that found it.
+
+### Verification
+
+- **Dead-wire and gating:** verified by tracing the exact
+  `build_conversation_answer()` gate offline -- with `web_ingest` omitted
+  the crawler never runs; wired in, it runs and the answer is synthesized
+  from fresh results. The explicit-action path now fetches even when a
+  local match exists, while automatic web research remains an empty-result
+  fallback.
+- **Relevance gate:** verified `_page_is_on_topic()` keeps a genuinely
+  relevant page (including a cat-history page that shares "cats"), keeps a
+  numeric statistics page for "how many cats in america", and drops true
+  decoys ("Book a Taxi Online", "Amazon Warehouse Jobs" for a "war"
+  query) -- the whole-word check specifically prevents the `war`
+  -> `warehouse` substring false positive that a naive `in` check would
+  cause. An empty topic set (nothing to gate on) keeps every page,
+  byte-identical to prior behavior.
+- **Backward compatibility:** `score_result()` / `_score_detail()` /
+  `rank_results()` / `explain_ranking()` are unchanged; the gate is a new,
+  additive step in `crawl_urls_to_index()` only. `CrawlStats` gained one
+  new `skipped_offtopic` counter, defaulting to 0.
+
+### Known Limitations
+
+- The relevance gate is lexical (whole-word / plural / stem overlap), not
+  semantic: a genuinely relevant page phrased with entirely different
+  vocabulary than the query would be dropped, and a page that merely
+  mentions a topic word in passing is kept. It is a junk-decoy filter, not
+  a fine-grained ranker -- fine-grained ordering remains ranking's job at
+  query time.
+- The gate prevents *new* garbage from entering the index; it does not
+  retroactively purge off-topic pages crawled before this release. Deleting
+  `brisart_ai_index.sqlite3` (or calling `Index.clear()`) clears any junk
+  already collected.
+- In automatic mode a stale or marginal *local* hit still suppresses the
+  web fallback by design (automatic web research only fires on an empty
+  local result set); use the explicit "Research Web" action to force fresh
+  web results regardless of what is already indexed.
+
+---
+
 ## [1.2.3] - 2026-09-16
 
 Fixes the root cause behind BrisartAI struggling with generic factual
