@@ -35,6 +35,12 @@ Settings / parameters
 - feedback: the session RelevanceFeedback store, forwarded into every
   search so ranking always reflects the user's marks.
 - At most ONE web search per sub-question, never stacked.
+- citation_sink (default None): when a caller passes a list, it is
+  populated with one {"display", "source_id", "title", "location",
+  "subquestion"} dict per cited source across every sub-question
+  (subquestion is None for a single, non-compound question, otherwise
+  the sub-question text) -- purely additive; the return value is always
+  the same plain str answer, and a None sink is zero behavior change.
 
 Edge cases
 ----------
@@ -72,7 +78,7 @@ Examples
     True
 """
 from __future__ import annotations
-from typing import Optional
+from typing import Dict, List, Optional
 from brisart_ai.core.settings import ResearchSettings
 from brisart_ai.io.input_cleaner import normalize_shellish_input
 from brisart_ai.knowledge.citation_graph import CitationGraph
@@ -84,7 +90,8 @@ from brisart_ai.knowledge.synthesizer import synthesize
 def build_conversation_answer(query, index, memory, limit=8,
                               settings: Optional[ResearchSettings] = None,
                               web_limit=5, force_web=False, web_ingest=None,
-                              feedback=None) -> str:
+                              feedback=None,
+                              citation_sink: Optional[List[Dict[str, object]]] = None) -> str:
     cleaned = normalize_shellish_input(query)
     recent = memory.recent_topics(limit=4)
     allowed = {"web"}
@@ -106,7 +113,14 @@ def build_conversation_answer(query, index, memory, limit=8,
             docs = search(index, sub, limit=limit, source_types=allowed, feedback=feedback)
         if docs:
             any_found = True
-            piece = synthesize(sub, docs, recent_topics=recent, citation_graph=graph)
+            sub_citations: Optional[List[Dict[str, object]]] = [] if citation_sink is not None else None
+            piece = synthesize(sub, docs, recent_topics=recent, citation_graph=graph,
+                              citation_sink=sub_citations)
+            if citation_sink is not None and sub_citations:
+                is_compound = len(subquestions) > 1
+                for entry in sub_citations:
+                    entry["subquestion"] = sub if is_compound else None
+                citation_sink.extend(sub_citations)
             if len(subquestions) > 1:
                 answers.append(f"[{sub}]\n{piece}")
             else:
@@ -123,5 +137,6 @@ def build_conversation_answer(query, index, memory, limit=8,
 
 
 __all__ = ["build_conversation_answer"]
+
 
 

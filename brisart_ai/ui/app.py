@@ -21,7 +21,16 @@ Settings / parameters
 Edge cases
 ----------
 - run() wraps app construction in a single try/except.
-- _answer_question() runs on a background thread.
+- _answer_question() runs on a background thread; self.service.
+  last_citations is read in that SAME worker right after ask() returns
+  (never on the Tk main thread), then handed to _on_answer_ready() via
+  self.after(0, ...) alongside the answer text -- self._busy already
+  serializes calls to service.ask(), so there is no race on
+  last_citations between one worker finishing and the next starting.
+- Pressing a citation's Relevant/Irrelevant button calls
+  _on_mark_citation(), which looks the citation up by its
+  BrisartService.last_citations "index" (NOT the in-text "[N]" bracket
+  number, which can repeat across a compound question's sub-answers).
 
 Known limitations
 -----------------
@@ -42,7 +51,7 @@ from __future__ import annotations
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
-from typing import Optional
+from typing import Dict, List, Optional
 
 from brisart_ai.knowledge.index import DEFAULT_DB
 from brisart_ai.ui import theme
@@ -134,20 +143,30 @@ class BrisartApp(tk.Tk):
             self.chat.append_system("Searching your imported files and notes...")
 
         def worker() -> None:
+            citations: List[Dict[str, object]] = []
             try:
                 answer = self.service.ask(question, force_web=force_web)
+                citations = list(self.service.last_citations)
             except Exception as exc:
                 answer = f"Something went wrong answering that: {exc}"
-            self.after(0, self._on_answer_ready, answer)
+            self.after(0, self._on_answer_ready, answer, citations)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_answer_ready(self, answer: str) -> None:
+    def _on_answer_ready(self, answer: str, citations: Optional[List[Dict[str, object]]] = None) -> None:
         self._busy = False
         self.chat.append_assistant(answer)
+        if citations:
+            self.chat.render_citation_controls(citations, on_mark=self._on_mark_citation)
         for diagnostic_line in self.service.last_diagnostics:
             self.chat.append_system(diagnostic_line)
         self._refresh_status()
+
+    def _on_mark_citation(self, citation: Dict[str, object], relevant: bool) -> None:
+        self.service.mark_citation(int(citation.get("index", -1)), relevant)
+        title = str(citation.get("title") or citation.get("location") or "that source")
+        verdict = "relevant" if relevant else "irrelevant"
+        self.chat.append_system(f"Marked \"{title}\" as {verdict}. Future searches will reflect this.")
 
     def _on_chat_submit(self, text: str) -> None:
         text = text.strip()
@@ -216,5 +235,6 @@ def run(db_path: str = DEFAULT_DB) -> None:
 
 
 __all__ = ["BrisartApp", "run"]
+
 
 

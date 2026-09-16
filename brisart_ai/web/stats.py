@@ -54,3 +54,4 @@ class CrawlStats:
         print(f"Errors: {self.errors}")
 
 
+

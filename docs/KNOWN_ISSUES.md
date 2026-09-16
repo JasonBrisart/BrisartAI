@@ -104,20 +104,6 @@ Fully fixed issues are **moved** to the [Resolved](#resolved) section at the bot
 
 ---
 
-## KI-010: Relevance feedback is wired into ranking but has no UI affordance to mark results
-
-- **Reported date:** 2026-09-16
-- **Severity:** Low (feature-completeness gap, not a defect)
-- **Environment:** All platforms; desktop UI only.
-- **Component:** `brisart_ai/knowledge/relevance_feedback.py`, `brisart_ai/ui/service.py`, `brisart_ai/ui/chat_panel.py`
-- **Steps to Reproduce:** Run the app, ask a question, and look for a way to tell BrisartAI that a returned source was relevant or irrelevant.
-- **Expected behavior:** A user marks a cited source good/bad, and subsequent searches in the same session nudge similar sources up or down.
-- **Actual behavior:** `BrisartService` owns a single session-lifetime `RelevanceFeedback` store and applies it to every ranked search, and `BrisartService.mark_relevant()` / `mark_irrelevant()` exist and work, but `ui/chat_panel.py` renders the transcript as plain text with no control that calls them. The feedback loop is therefore fully wired on the engine side but unreachable from the GUI, so the store stays empty in normal use and has no effect on ranking (multiplier 1.0).
-- **Tried / Ruled out:** The store was deliberately built engine-first and bounded (`+/-25%`, clamped per-term) so it is safe to always apply before any UI exists; wiring it into ranking without a trigger was the intended first step, not an oversight in the ranking layer itself.
-- **Next step:** Add a per-source mark-relevant / mark-irrelevant control to `ui/chat_panel.py` that calls the existing `BrisartService` methods, closing the loop end to end. (Session-scoped only; cross-session persistence is a separate, larger design question and explicitly out of scope for this issue.)
-
----
-
 ## KI-011: Recency ranking signal uses index time, not document publication date
 
 - **Reported date:** 2026-09-16
@@ -287,3 +273,17 @@ Closed issues are kept here (rather than deleted) so there is a durable record o
 - **Tried / Ruled out:** The replay scripts were judged sufficient for the project's solo-maintained scale at the time, but did not substitute for automated coverage of non-ranking logic (parsers, blocklist, settings, vault).
 - **Resolved date:** 2026-09-13
 - **Resolution:** Added a full test suite co-located with source (one `tests/` subfolder per `brisart_ai/` package). Pure `unittest.TestCase` classes with zero external test dependencies; `pytest` is used only as the discovery runner, invoked with `--import-mode=importlib` explicitly on every call (no config file sets this automatically). See [`TESTING.md`](TESTING.md).
+
+### KI-010: Relevance feedback was wired into ranking but had no UI affordance to mark results — RESOLVED
+
+- **Reported date:** 2026-09-16
+- **Severity:** Low (feature-completeness gap, not a defect)
+- **Environment:** All platforms; desktop UI only.
+- **Component:** `brisart_ai/knowledge/relevance_feedback.py`, `brisart_ai/ui/service.py`, `brisart_ai/ui/chat_panel.py`, `brisart_ai/ui/app.py`, `brisart_ai/knowledge/synthesizer.py`, `brisart_ai/core/conversation.py`
+- **Steps to Reproduce:** Run the app, ask a question, and look for a way to tell BrisartAI that a returned source was relevant or irrelevant.
+- **Expected behavior:** A user marks a cited source good/bad, and subsequent searches in the same session nudge similar sources up or down.
+- **Actual behavior:** `BrisartService` owned a single session-lifetime `RelevanceFeedback` store and applied it to every ranked search, and `BrisartService.mark_relevant()` / `mark_irrelevant()` existed and worked, but `ui/chat_panel.py` rendered the transcript as plain text with no control that called them. The feedback loop was fully wired on the engine side but unreachable from the GUI, so the store stayed empty in normal use and had no effect on ranking (multiplier 1.0).
+- **Tried / Ruled out:** The store was deliberately built engine-first and bounded (`+/-25%`, clamped per-term) so it was safe to always apply before any UI existed; wiring it into ranking without a trigger was the intended first step, not an oversight in the ranking layer itself.
+- **Resolved date:** 2026-09-16
+- **Resolution:** `knowledge/synthesizer.py`'s `synthesize()` and `core/conversation.py`'s `build_conversation_answer()` both gained an additive, opt-in `citation_sink` list parameter that captures each cited source's `source_id`/`title`/`location` (and, for a compound question, which sub-question it belongs to) alongside the existing plain-text answer, with zero change to the return value when the parameter is omitted. `BrisartService.ask()` now refreshes `self.last_citations` on every call, each entry carrying a globally-unique 1-based `index`, and a new `mark_citation(index, relevant)` method resolves that index straight to the existing `mark_relevant()`/`mark_irrelevant()` calls. `ui/chat_panel.py`'s `ChatPanel` gained `render_citation_controls()`, embedding a small Relevant/Irrelevant button row under every cited answer via `Text.window_create()`; `ui/app.py`'s background answer worker now captures `last_citations` and wires button presses to `mark_citation()`. Verified end to end offline: `mark_citation()` measurably shifts `RelevanceFeedback`'s term weight in the correct direction, and a compound question's citation indices stay globally unique even though each sub-answer's own in-text `[N]` bracket numbering independently restarts at 1. 13 new tests added across `knowledge/tests/test_synthesizer.py`, `core/tests/test_conversation.py`, and `ui/tests/test_service_headless.py`; full suite passes.
+

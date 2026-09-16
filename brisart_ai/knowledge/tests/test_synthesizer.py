@@ -5,7 +5,9 @@ Purpose
 -------
 Unit tests for brisart_ai.knowledge.synthesizer. Verifies the module's public
 behavior and its documented edge cases so regressions are caught
-before release. Contains 13 test cases across TestModes, TestSentenceScore, TestSynthesize.
+before release. Contains 17 test cases across TestModes, TestSentenceScore, TestSynthesize,
+including the citation_sink structured-citation-capture behavior used by
+BrisartService.ask() (see KI-010) for a UI mark-relevant/irrelevant control.
 
 Communication / relationships
 ------------------------------
@@ -81,6 +83,47 @@ class TestSynthesize(unittest.TestCase):
         synthesize("who founded microsoft", docs, citation_graph=g)
         self.assertGreaterEqual(g.corroboration_count("founded microsoft"), 1)
 
+    def test_citation_sink_populated_with_source_id_and_title(self):
+        # KI-010: structured citation capture, so a UI can offer a
+        # mark-relevant/irrelevant control per cited source without
+        # parsing the answer text.
+        docs=[{"id":42,"source_type":"file","location":"/a.txt","title":"History of Microsoft",
+               "text":"Microsoft was founded by Bill Gates and Paul Allen in 1975 in Albuquerque."}]
+        sink = []
+        synthesize("who founded microsoft", docs, citation_sink=sink)
+        self.assertEqual(len(sink), 1)
+        self.assertEqual(sink[0]["source_id"], 42)
+        self.assertEqual(sink[0]["title"], "History of Microsoft")
+        self.assertEqual(sink[0]["display"], 1)
+
+    def test_citation_sink_default_none_is_noop(self):
+        # Purely additive: omitting citation_sink changes nothing about
+        # the returned answer string.
+        docs=[{"id":1,"source_type":"file","location":"/a.txt","title":"A",
+               "text":"Microsoft was founded by Bill Gates and Paul Allen in 1975."}]
+        with_sink = synthesize("who founded microsoft", docs, citation_sink=[])
+        without_sink = synthesize("who founded microsoft", docs)
+        self.assertEqual(with_sink, without_sink)
+
+    def test_citation_sink_order_matches_sources_list(self):
+        docs=[
+            {"id":1,"source_type":"file","location":"/a.txt","title":"First Source",
+             "text":"Microsoft was founded by Bill Gates and Paul Allen in 1975 here."},
+            {"id":2,"source_type":"file","location":"/b.txt","title":"Second Source",
+             "text":"Microsoft was founded in Albuquerque New Mexico by two young men."},
+        ]
+        sink = []
+        synthesize("who founded microsoft", docs, citation_sink=sink)
+        self.assertEqual(len(sink), 2)
+        self.assertEqual({c["source_id"] for c in sink}, {1, 2})
+        self.assertEqual([c["display"] for c in sink], [1, 2])
+
+    def test_citation_sink_empty_when_no_documents(self):
+        sink = []
+        synthesize("x", [], citation_sink=sink)
+        self.assertEqual(sink, [])
+
 if __name__ == "__main__": unittest.main()
+
 
 

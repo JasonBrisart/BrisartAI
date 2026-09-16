@@ -4,12 +4,107 @@ All notable changes to BrisartAI are documented in this file, oldest release at 
 
 ---
 
+## [1.2.2] - 2026-09-16
+
+Closes the feature-completeness gap tracked as KI-010: relevance feedback
+was engine-ready and applied to every ranked search since 1.2.0, but there
+was no way to actually trigger it from the desktop chat window. This
+release adds the missing hook end to end -- from the ranking engine's
+existing `RelevanceFeedback` store, through a new structured citation
+channel, to a real Relevant/Irrelevant control under every cited source in
+the chat transcript. No ranking math changed; this is entirely about
+making an already-built capability reachable.
+
+### Added
+
+**Structured per-citation data, not just formatted text.** Previously,
+`knowledge/synthesizer.py`'s `synthesize()` only ever returned a single
+formatted answer string -- a caller had no way to know which `source_id`
+backed which printed `[N]` marker without re-parsing the text. `synthesize()`
+now accepts an optional `citation_sink` list: when supplied, it is appended
+with one `{"display", "source_id", "title", "location"}` dict per cited
+source, in citation order. This is purely additive -- a `None` sink (the
+default) is exactly the previous behavior, and the return value is always
+the same plain string either way.
+
+`core/conversation.py`'s `build_conversation_answer()` forwards this same
+`citation_sink` through every sub-question's `synthesize()` call, tagging
+each entry with `"subquestion"` (the sub-question text, or `None` for a
+plain, non-compound question) -- so a compound question's citations never
+collide even though each sub-answer's own in-text `[N]` numbering
+legitimately restarts at 1.
+
+**`BrisartService.ask()` now exposes `last_citations`.** Every call
+refreshes `self.last_citations` with that answer's structured citation
+list, each entry additionally carrying a globally-unique, 1-based `"index"`
+(distinct from the in-text `[N]` bracket number, which can repeat across a
+compound answer's sub-questions). A new `mark_citation(index, relevant)`
+method looks a citation up by that index and calls the existing
+`mark_relevant()`/`mark_irrelevant()` with the right `source_id`/`title` --
+the UI never needs to know a raw source ID.
+
+**A real Relevant/Irrelevant control in the chat window.**
+`ui/chat_panel.py`'s `ChatPanel` gains `render_citation_controls()`, which
+embeds one small "👍 Relevant / 👎 Irrelevant" row per cited source directly
+under an assistant's answer in the transcript, using Tkinter's
+`Text.window_create()`. It is a no-op for an uncited answer (e.g. "I don't
+have any indexed information..."), so no stray empty row ever appears.
+`ui/app.py`'s background answer worker now also captures
+`service.last_citations` right after `ask()` returns and hands both the
+answer and its citations to `_on_answer_ready()`; pressing a button calls a
+new `_on_mark_citation()`, which calls `service.mark_citation()` and prints
+a short confirmation line ("Marked \"...\" as relevant/irrelevant. Future
+searches will reflect this.").
+
+### Verification
+
+- **Citation capture:** verified end to end offline (no display required)
+  that `BrisartService.ask()` populates `last_citations` with the correct
+  `source_id`/`title` for a real indexed note, and that `mark_citation()`
+  measurably nudges `RelevanceFeedback`'s term weight in the correct
+  direction (positive for relevant, negative for irrelevant).
+- **Compound-question safety:** verified that for "who founded microsoft
+  and when was it founded?", every citation's `"index"` is globally unique
+  across both sub-answers even though their in-text `[N]` bracket numbers
+  both independently restart at 1 -- so marking citation 3 can never
+  accidentally act on the wrong source from the other sub-question.
+- **Backward compatibility:** verified `synthesize()` and
+  `build_conversation_answer()` return byte-for-byte identical answer
+  strings whether or not `citation_sink` is supplied.
+- **Test suite:** the co-located suite passes (`pytest
+  --import-mode=importlib`), with 13 new tests added across
+  `knowledge/tests/test_synthesizer.py`, `core/tests/test_conversation.py`,
+  and `ui/tests/test_service_headless.py` covering all of the above. The
+  new Tkinter widget code in `chat_panel.py`/`app.py` itself remains
+  outside the automated suite, consistent with every other Tkinter widget
+  in the project (see `docs/TESTING.md`); it was verified by static
+  parsing and by exercising the exact same headless service-layer path
+  the UI calls into.
+
+### Fixed
+
+- **KI-010 resolved.** See `docs/KNOWN_ISSUES.md`'s Resolved section for
+  the full write-up.
+
+### Known Limitations
+
+- Marks are still session-scoped only (this was already documented and is
+  unchanged): closing BrisartAI clears `RelevanceFeedback`'s state, and
+  there is still no cross-session persistence of a user's relevance
+  judgements. That remains a distinct, larger design question.
+- A citation's Relevant/Irrelevant buttons remain clickable after use;
+  there is no visual "already marked" state on the button itself.
+  `RelevanceFeedback`'s own per-term clamping (`MAX_TERM_WEIGHT`/
+  `MIN_TERM_WEIGHT`) is what keeps repeated marks bounded, not the widget.
+  
+---
+
 ## [1.2.1] - 2026-09-16
 
-Fixes a web-search relevance bug that let genuinely off-topic pages ("not
-remotely related" results) reach ranking and, when the real sources were
-throttled or missing, be answered as though they were relevant. Two distinct
-root causes in the per-result relatedness filter
+Fixes a web-search relevance bug that let genuinely off-topic pages 
+reach ranking and, when the real sources were throttled or missing, 
+be answered as though they were relevant. Two distinct root causes 
+in the per-result relatedness filter
 (`brisart_ai/web/search.py::_partition_related_results`) are corrected. No other
 behavior changed; the fix is confined to which provider results are judged
 related to the query before ranking.

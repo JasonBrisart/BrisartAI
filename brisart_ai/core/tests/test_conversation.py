@@ -5,7 +5,8 @@ Purpose
 -------
 Unit tests for brisart_ai.core.conversation. Verifies the module's public
 behavior and its documented edge cases so regressions are caught
-before release. Contains 6 test cases across TestBuildConversationAnswer.
+before release. Contains 9 test cases across TestBuildConversationAnswer,
+including the citation_sink pass-through to synthesize() (see KI-010).
 
 Communication / relationships
 ------------------------------
@@ -113,8 +114,67 @@ class TestBuildConversationAnswer(unittest.TestCase):
             self.assertIn("Sources:", answer)
             index.close(); memory.close()
 
+    def test_citation_sink_populated_for_simple_question(self):
+        # KI-010: build_conversation_answer() forwards citation_sink into
+        # synthesize(), so a caller (BrisartService) can learn which
+        # source_id/title backs each cited source without parsing the
+        # answer text.
+        with tempfile.TemporaryDirectory() as d:
+            index, memory, settings = self._make(d)
+            index.add_source(source_type="file", location="/docs/microsoft-history.txt",
+                title="History of Microsoft",
+                text="Microsoft was founded by Bill Gates and Paul Allen in 1975 in Albuquerque, New Mexico.",
+                extension="txt", size_bytes=100)
+            sink = []
+            build_conversation_answer("who founded microsoft?", index, memory, settings=settings,
+                                      citation_sink=sink)
+            self.assertEqual(len(sink), 1)
+            self.assertEqual(sink[0]["title"], "History of Microsoft")
+            self.assertIsNone(sink[0]["subquestion"])
+            index.close(); memory.close()
+
+    def test_citation_sink_tags_subquestion_for_compound_question(self):
+        with tempfile.TemporaryDirectory() as d:
+            index, memory, settings = self._make(d)
+            index.add_source(source_type="file", location="/a.txt", title="Founders Doc",
+                text="Microsoft was founded by Bill Gates and Paul Allen in 1975 in Albuquerque here.",
+                extension="txt", size_bytes=50)
+            index.add_source(source_type="file", location="/b.txt", title="Founding Date Doc",
+                text="Microsoft was officially founded on April 4 1975 according to this record.",
+                extension="txt", size_bytes=50)
+            sink = []
+            build_conversation_answer("who founded microsoft and when was it founded?",
+                                      index, memory, settings=settings, citation_sink=sink)
+            self.assertTrue(sink)
+            self.assertTrue(all(c["subquestion"] for c in sink))
+            # "display" (the in-text "[N]" bracket number) legitimately
+            # restarts at 1 for each sub-question, but the (subquestion,
+            # display) PAIR must be unique -- proving no two citations were
+            # silently merged into one across sub-questions.
+            pairs = [(c["subquestion"], c["display"]) for c in sink]
+            self.assertEqual(len(pairs), len(set(pairs)))
+            index.close(); memory.close()
+
+    def test_citation_sink_default_none_is_noop(self):
+        # Purely additive: passing citation_sink=[] vs. omitting it entirely
+        # must never change the returned answer string.
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            index1, memory1, settings1 = self._make(d1)
+            index2, memory2, settings2 = self._make(d2)
+            for idx in (index1, index2):
+                idx.add_source(source_type="file", location="/a.txt", title="A",
+                    text="Microsoft was founded by Bill Gates and Paul Allen in 1975.",
+                    extension="txt", size_bytes=50)
+            with_sink = build_conversation_answer("who founded microsoft?", index1, memory1,
+                                                  settings=settings1, citation_sink=[])
+            without_sink = build_conversation_answer("who founded microsoft?", index2, memory2,
+                                                     settings=settings2)
+            self.assertEqual(with_sink, without_sink)
+            index1.close(); memory1.close(); index2.close(); memory2.close()
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

@@ -89,3 +89,4 @@ class Sidebar(ttk.Frame):
 __all__ = ["Sidebar"]
 
 
+

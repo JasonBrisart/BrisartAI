@@ -5,3 +5,4 @@ Pure-Python, from-spec reimplementations of the standard-library building blocks
 Every module below is **independently verified against the real stdlib function it replaces** — decision-for-decision, byte-for-byte — not merely internally self-consistent, and every module is **wired into its real call sites** across the rest of the application.
 
 
+

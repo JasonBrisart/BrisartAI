@@ -118,3 +118,4 @@ class SettingsDialog(tk.Toplevel):
 __all__ = ["ask_import_path", "ask_text", "ask_note", "SettingsDialog"]
 
 
+

@@ -22,9 +22,15 @@ Settings / parameters
 ---------------------
 - __init__(db_path): construction deliberately unguarded.
 - ask(text, force_web=None): forwards the session feedback store into the
-  conversation router on every call.
+  conversation router on every call, and refreshes self.last_citations
+  with that answer's structured citation data (source_id/title/location
+  per [N] marker), via conversation.py's citation_sink parameter.
 - mark_relevant / mark_irrelevant: record a user's judgement on a source
   into the session store, so subsequent searches reflect it.
+- mark_citation(index, relevant): the UI-facing entry point -- looks up
+  self.last_citations by its 1-based running index (not the in-text
+  bracket number, which can repeat across sub-questions) and calls
+  mark_relevant()/mark_irrelevant() with the right source_id/title.
 - _DIAGNOSTIC_MARKERS / _MAX_DIAGNOSTIC_LINES.
 
 Edge cases
@@ -52,7 +58,7 @@ from __future__ import annotations
 import contextlib
 import io
 import threading
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from brisart_ai.core.conversation import build_conversation_answer
 from brisart_ai.core.session_memory import SessionMemory
 from brisart_ai.core.settings import ResearchSettings, TOGGLE_LABELS
@@ -83,6 +89,7 @@ class BrisartService:
         self.feedback = RelevanceFeedback()
         self._stdout_lock = threading.Lock()
         self.last_diagnostics: List[str] = []
+        self.last_citations: List[Dict[str, object]] = []
 
     def counts(self) -> Tuple[int, int, int]:
         total = self.index.source_count()
@@ -91,10 +98,15 @@ class BrisartService:
         return total, files, web
 
     def ask(self, text: str, limit: int = 8, web_limit: int = 5, force_web: Optional[bool] = None) -> str:
-        """Answer a question, with the session feedback store applied to ranking."""
+        """Answer a question, with the session feedback store applied to
+        ranking. Also refreshes self.last_citations with the structured
+        (source_id, title, location) data behind THIS answer's [N] markers,
+        so the UI can offer a mark-relevant/irrelevant control per citation
+        without parsing the answer text itself."""
         resolved_force_web = (
             self.settings.get("auto_web_research") if force_web is None else bool(force_web)
         )
+        citation_sink: List[Dict[str, object]] = []
         buffer = io.StringIO()
         with self._stdout_lock:
             with contextlib.redirect_stdout(buffer):
@@ -102,8 +114,12 @@ class BrisartService:
                     text, self.index, self.memory, limit=limit,
                     settings=self.settings, web_limit=web_limit,
                     force_web=resolved_force_web, feedback=self.feedback,
+                    citation_sink=citation_sink,
                 )
         self.last_diagnostics = self._extract_diagnostics(buffer.getvalue())
+        for index, entry in enumerate(citation_sink, start=1):
+            entry["index"] = index
+        self.last_citations = citation_sink
         return answer
 
     def mark_relevant(self, source_id, title: str) -> None:
@@ -113,6 +129,21 @@ class BrisartService:
     def mark_irrelevant(self, source_id, title: str) -> None:
         """Record that the user found a source irrelevant; nudges future ranking."""
         self.feedback.mark_irrelevant(source_id, title)
+
+    def mark_citation(self, index: int, relevant: bool) -> Optional[Dict[str, object]]:
+        """Mark a citation from the MOST RECENT ask() answer, by its 1-based
+        position in self.last_citations (the running "citation index" the UI
+        shows -- NOT the possibly-duplicated in-text "[N]" bracket number,
+        which can repeat across sub-questions in a compound answer). Returns
+        the matched citation dict, or None if no citation has that index."""
+        for entry in self.last_citations:
+            if entry.get("index") == index:
+                if relevant:
+                    self.mark_relevant(entry["source_id"], str(entry.get("title", "")))
+                else:
+                    self.mark_irrelevant(entry["source_id"], str(entry.get("title", "")))
+                return entry
+        return None
 
     @staticmethod
     def _extract_diagnostics(captured_output: str) -> List[str]:
@@ -165,5 +196,6 @@ class BrisartService:
 
 
 __all__ = ["BrisartService"]
+
 
 

@@ -22,6 +22,11 @@ Settings / parameters
 ---------------------
 - max_sources (default 6) / max_sentences (default 10): caps on sources
   and total sentences an answer draws from.
+- citation_sink (default None): when a caller passes a list, synthesize()
+  APPENDS one {"display", "source_id", "title", "location"} dict per
+  cited source, in the same order the answer cites them -- purely
+  additive; the return value is always the same plain str either way,
+  and a None sink (the default) means zero behavior change.
 - Sentence-score point values (added only when a sentence already shares
   >= 1 query term): quantity mode +10.0 for a real numeric quantity else
   +3.0 for a bare digit; comparison mode +8.0 for comparative language;
@@ -155,7 +160,8 @@ def sentence_score(sentence, query_terms, quantity_mode=False,
 def synthesize(query: str, docs: List[Document], max_sources: int = 6,
                max_sentences: int = 10, recent_topics: Optional[Iterable[str]] = None,
                citation_graph: Optional[CitationGraph] = None,
-               report_confidence: bool = True) -> str:
+               report_confidence: bool = True,
+               citation_sink: Optional[List[Dict[str, object]]] = None) -> str:
     if not docs:
         return "I don't have any indexed information that answers that yet."
 
@@ -221,6 +227,21 @@ def synthesize(query: str, docs: List[Document], max_sources: int = 6,
 
     display_number = {orig: i for i, orig in enumerate(order, start=1)}
 
+    # Optional structured citation capture: lets a caller (the UI, in
+    # particular) learn which source_id/title/location backs each printed
+    # [N] marker, so a user can mark a SPECIFIC cited source relevant or
+    # irrelevant via knowledge.relevance_feedback.RelevanceFeedback,
+    # without this module's return type ever changing (still a plain str).
+    if citation_sink is not None:
+        for orig in order:
+            document = original_docs[orig]
+            citation_sink.append({
+                "display": display_number[orig],
+                "source_id": document.get("id", orig),
+                "title": str(document.get("title") or document.get("location", "")),
+                "location": str(document.get("location", "")),
+            })
+
     lines: List[str] = []
     for orig in order:
         paragraph = " ".join(by_source[orig][:3])
@@ -260,5 +281,6 @@ def synthesize(query: str, docs: List[Document], max_sources: int = 6,
 
 __all__ = ["format_source", "query_wants_comparison", "query_wants_quantity",
            "query_wants_reason", "sentence_score", "synthesize"]
+
 
 

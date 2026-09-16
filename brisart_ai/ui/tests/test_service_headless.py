@@ -5,7 +5,8 @@ Purpose
 -------
 Unit tests for brisart_ai.ui.service. Verifies the module's public
 behavior and its documented edge cases so regressions are caught
-before release. Contains 8 test cases across TestBrisartServiceHeadless.
+before release. Contains 14 test cases across TestBrisartServiceHeadless,
+including last_citations population and mark_citation() (see KI-010).
 
 Communication / relationships
 ------------------------------
@@ -117,8 +118,81 @@ class TestBrisartServiceHeadless(unittest.TestCase):
             self.assertIn("My Title", result)
             service.close()
 
+    def test_ask_populates_last_citations(self):
+        # KI-010: BrisartService.ask() must expose structured citation
+        # data (source_id/title) for the answer it just gave, so the UI
+        # can offer a mark-relevant/irrelevant control per cited source.
+        with tempfile.TemporaryDirectory() as d:
+            service = self._make(d)
+            service.add_note("Microsoft History",
+                "Microsoft was founded by Bill Gates and Paul Allen in 1975.")
+            service.ask("who founded microsoft?", force_web=False)
+            self.assertTrue(service.last_citations)
+            first = service.last_citations[0]
+            self.assertIn("source_id", first)
+            self.assertIn("title", first)
+            self.assertIn("index", first)
+            self.assertEqual(first["index"], 1)
+            service.close()
+
+    def test_ask_with_no_results_leaves_last_citations_empty(self):
+        with tempfile.TemporaryDirectory() as d:
+            service = self._make(d)
+            service.ask("something with absolutely no indexed match", force_web=False)
+            self.assertEqual(service.last_citations, [])
+            service.close()
+
+    def test_mark_citation_relevant_nudges_feedback_store(self):
+        with tempfile.TemporaryDirectory() as d:
+            service = self._make(d)
+            service.add_note("Microsoft History",
+                "Microsoft was founded by Bill Gates and Paul Allen in 1975.")
+            service.ask("who founded microsoft?", force_web=False)
+            citation = service.last_citations[0]
+            result = service.mark_citation(citation["index"], True)
+            self.assertEqual(result, citation)
+            self.assertGreater(service.feedback.term_weight("microsoft"), 0.0)
+            service.close()
+
+    def test_mark_citation_irrelevant_nudges_feedback_store(self):
+        with tempfile.TemporaryDirectory() as d:
+            service = self._make(d)
+            service.add_note("Microsoft History",
+                "Microsoft was founded by Bill Gates and Paul Allen in 1975.")
+            service.ask("who founded microsoft?", force_web=False)
+            citation = service.last_citations[0]
+            service.mark_citation(citation["index"], False)
+            self.assertLess(service.feedback.term_weight("microsoft"), 0.0)
+            service.close()
+
+    def test_mark_citation_unknown_index_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            service = self._make(d)
+            service.add_note("Microsoft History",
+                "Microsoft was founded by Bill Gates and Paul Allen in 1975.")
+            service.ask("who founded microsoft?", force_web=False)
+            self.assertIsNone(service.mark_citation(9999, True))
+            service.close()
+
+    def test_last_citations_refreshed_on_next_ask(self):
+        # A second ask() must replace last_citations with the NEW answer's
+        # citations, not accumulate across calls.
+        with tempfile.TemporaryDirectory() as d:
+            service = self._make(d)
+            service.add_note("Microsoft History",
+                "Microsoft was founded by Bill Gates and Paul Allen in 1975.")
+            service.add_note("Narwhal Facts", "Narwhals have a long spiral tusk on their head.")
+            service.ask("who founded microsoft?", force_web=False)
+            first_titles = {c["title"] for c in service.last_citations}
+            service.ask("narwhal tusk", force_web=False)
+            second_titles = {c["title"] for c in service.last_citations}
+            self.assertNotEqual(first_titles, second_titles)
+            self.assertIn("Narwhal Facts", second_titles)
+            service.close()
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
