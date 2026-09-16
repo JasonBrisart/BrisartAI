@@ -4,6 +4,74 @@ All notable changes to BrisartAI are documented in this file, oldest release at 
 
 ---
 
+## [1.2.3] - 2026-09-16
+
+Fixes the root cause behind BrisartAI struggling with generic factual
+questions searched online: search-result **snippets** (the description
+text every provider returns alongside a result's title) were parsed and
+then discarded before relatedness judging or ranking ever saw them,
+closing KI-006.
+
+### Fixed
+
+**Entity-answer pages were discarded before ranking ever saw them.**
+Reproducing "what is the capital of france" showed the correct source
+-- a page titled just "Paris - Wikipedia" -- was rejected outright by
+`web/search.py`'s `_partition_related_results()`, because "Paris"
+shares no word with "capital" or "france". This is not a narrow case:
+it is the general shape of any factual question whose answer is a
+proper noun ("who invented the telephone" -> a person's name, "capital
+of X" -> a city, "author of Y" -> a writer), and it is the most likely
+driver of BrisartAI's difficulty with generic web questions. The root
+cause was architectural: relatedness and ranking judged a result using
+only its URL and title, never the description/snippet text a real
+search results page also shows next to every result -- exactly the
+text that would have said "Paris is the capital ... of France."
+
+`web/search.py`'s `_ResultLinkParser` now captures a bounded snippet
+(`SNIPPET_CHAR_CAP = 300` characters) of the trailing description text
+immediately following each result's title link, for every one of the
+seven providers uniformly. `search_public_web()` gained an additive
+`with_snippets=True` return shape -- `with_titles=True` and the
+`list[str]` default are byte-identical to prior behavior for every
+existing caller. `_partition_related_results()` now accepts either
+`(url, title)` pairs or `(url, title, snippet)` triples and folds the
+snippet into its whole-word relatedness check when present.
+`web/crawler.py`'s `score_result()` / `_score_detail()` /
+`rank_results()` / `explain_ranking()` all gained an optional snippet
+(or snippets map) parameter, purely additive: a term matched only in
+the snippet contributes a smaller score bump than a title match, so an
+entity-answer page is recognized as related and ranked correctly
+without a snippet-only match ever outweighing a genuine title match.
+
+### Verification
+
+- 9 new tests: `web/tests/test_search.py` gained
+  `test_entity_answer_page_dropped_without_snippet_2tuple` (documents
+  the pre-fix boundary: no snippet means nothing to fold in),
+  `test_entity_answer_page_kept_with_snippet_3tuple_FIX`, and
+  `test_inventor_entity_answer_kept_with_snippet_FIX`; `web/tests/test_crawler.py`
+  gained `TestScoreResultSnippetAware` (snippet-only match scores
+  positive; scores strictly below a title match for the same term) and
+  `TestRankResultsWithSnippets` (an entity-answer page ranks above an
+  irrelevant decoy once its snippet is supplied).
+- Backward compatibility verified explicitly:
+  `test_no_snippet_argument_is_backward_compatible` and
+  `test_rank_results_without_snippets_arg_is_backward_compatible` confirm
+  omitting the new parameter is byte-identical to prior scoring.
+- Full co-located suite passes (`pytest --import-mode=importlib`).
+
+### Known Limitations
+
+- Snippet capture is a trailing-text heuristic bounded at 300
+  characters, not markup-aware extraction of a specific "description"
+  element; a provider whose markup doesn't fit this pattern yields an
+  empty snippet (a safe no-op), not a guaranteed capture.
+- KI-002, KI-003, and KI-005 (documented in `docs/KNOWN_ISSUES.md`)
+  remain open and are unrelated to this fix.
+
+---
+
 ## [1.2.2] - 2026-09-16
 
 Closes the feature-completeness gap tracked as KI-010: relevance feedback

@@ -31,6 +31,11 @@ Edge cases
 - _stem(): crude suffix stripper.
 - Article-slug bonus checks both "-" and "_".
 - content_exists() swallows any exception, returns False.
+- score_result()/_score_detail()/rank_results()/explain_ranking() all
+  accept an optional snippet (or snippets map), purely additive: omitting
+  it is byte-identical to prior behavior. A term matched only in the
+  snippet (not path/host/title) contributes a smaller score bump than a
+  title match, per KI-006's resolution.
 
 Known limitations
 -----------------
@@ -80,7 +85,6 @@ _INTENT_HINTS: Tuple[Tuple[Tuple[str, ...], str], ...] = (
 
 _QUERY_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-']*")
 _URL_WORD = re.compile(r"[A-Za-z0-9]+")
-
 _STEM_SUFFIXES = (
     "ations", "ation", "ings", "ing", "ors", "or", "ers", "er",
     "ions", "ion", "ed", "es", "s",
@@ -136,13 +140,13 @@ INTENT_WEIGHT = 2
 PHRASE_MATCH_BONUS = 4
 
 
-def score_result(url: str, topic_terms: Set[str], query: str = "", title: str = "") -> int:
+def score_result(url: str, topic_terms: Set[str], query: str = "", title: str = "", snippet: str = "") -> int:
     """Heuristic relevance score for a result URL. Higher is better."""
-    _matched, score = _score_detail(url, topic_terms, query, title)
+    _matched, score = _score_detail(url, topic_terms, query, title, snippet)
     return score
 
 
-def _score_detail(url: str, topic_terms: Set[str], query: str = "", title: str = "") -> Tuple[int, int]:
+def _score_detail(url: str, topic_terms: Set[str], query: str = "", title: str = "", snippet: str = "") -> Tuple[int, int]:
     try:
         parts = brisart_urlsplit(url)
     except ValueError:
@@ -153,6 +157,7 @@ def _score_detail(url: str, topic_terms: Set[str], query: str = "", title: str =
     path_words = set(_URL_WORD.findall(path))
     host_words = set(_URL_WORD.findall(host))
     title_words = set(_URL_WORD.findall(str(title or "").casefold()))
+    snippet_words = set(_URL_WORD.findall(str(snippet or "").casefold()))
 
     def _matches(term: str, words: Set[str]) -> bool:
         stem = _stem(term)
@@ -167,6 +172,13 @@ def _score_detail(url: str, topic_terms: Set[str], query: str = "", title: str =
             matched_terms += 1
         elif _matches(term, host_words) or _matches(term, title_words):
             score += 2
+            matched_terms += 1
+        elif _matches(term, snippet_words):
+            # A snippet-only match is real signal (see KI-006) but weaker
+            # than a title/host match -- the answer word appearing only in
+            # the page's own description text, not its title, warrants a
+            # smaller bump than a title match earns.
+            score += 1
             matched_terms += 1
 
     if matched_terms > 1:
@@ -187,7 +199,7 @@ def _score_detail(url: str, topic_terms: Set[str], query: str = "", title: str =
         score -= 3
 
     if query:
-        phrase_haystack = f"{_intent_text(url)} {title or ''}"
+        phrase_haystack = f"{_intent_text(url)} {title or ''} {snippet or ''}"
         phrase_factor, _phrase_hits = phrase_match_adjust(query, phrase_haystack)
         if phrase_factor != 1.0:
             score += PHRASE_MATCH_BONUS
@@ -196,7 +208,7 @@ def _score_detail(url: str, topic_terms: Set[str], query: str = "", title: str =
         intent = detect_intent(query)
         if intent != INTENT_GENERAL:
             delta, _boosts, _penalties = score_intent(
-                f"{_intent_text(url)} {title or ''}", intent, query, topic_terms=topic_terms,
+                f"{_intent_text(url)} {title or ''} {snippet or ''}", intent, query, topic_terms=topic_terms,
             )
             score += int(round(delta * INTENT_WEIGHT))
 
@@ -216,6 +228,7 @@ def _intent_text(url: str) -> str:
 def rank_results(
     urls: Sequence[str], topic_terms: Set[str], query: str = "",
     titles: Optional[Dict[str, str]] = None,
+    snippets: Optional[Dict[str, str]] = None,
 ) -> List[str]:
     """De-duplicate and sort URLs best-first, preserving order on ties."""
     seen: Set[str] = set()
@@ -226,7 +239,8 @@ def rank_results(
             continue
         seen.add(key)
         title = (titles or {}).get(key, "")
-        _matched, score = _score_detail(url, topic_terms, query, title)
+        snippet = (snippets or {}).get(key, "")
+        _matched, score = _score_detail(url, topic_terms, query, title, snippet)
         unique.append((-score, position, url))
     unique.sort()
     return [url for _, _, url in unique]
@@ -235,6 +249,7 @@ def rank_results(
 def explain_ranking(
     urls: Sequence[str], topic_terms: Set[str], query: str = "",
     titles: Optional[Dict[str, str]] = None,
+    snippets: Optional[Dict[str, str]] = None,
 ) -> List[dict]:
     """Per-URL scoring breakdown, best-first -- used by the replay scripts."""
     intent = detect_intent(query) if query else INTENT_GENERAL
@@ -246,19 +261,20 @@ def explain_ranking(
             continue
         seen.add(key)
         title = (titles or {}).get(key, "")
-        matched, total = _score_detail(url, topic_terms, query, title)
+        snippet = (snippets or {}).get(key, "")
+        matched, total = _score_detail(url, topic_terms, query, title, snippet)
         _base_matched, base = _score_detail(url, topic_terms, "", "")
 
         if intent != INTENT_GENERAL:
             delta, boosts, penalties = score_intent(
-                f"{_intent_text(url)} {title or ''}", intent, query, topic_terms=topic_terms,
+                f"{_intent_text(url)} {title or ''} {snippet or ''}", intent, query, topic_terms=topic_terms,
             )
         else:
             delta, boosts, penalties = (0.0, [], [])
 
         phrase_matched = False
         if query:
-            phrase_factor, _hits = phrase_match_adjust(query, f"{_intent_text(url)} {title or ''}")
+            phrase_factor, _hits = phrase_match_adjust(query, f"{_intent_text(url)} {title or ''} {snippet or ''}")
             phrase_matched = phrase_factor != 1.0
 
         rows.append({
@@ -337,7 +353,6 @@ def crawl_urls_to_index(
 
         print(f"WEB FETCH depth={level}: {current_url}")
         result = fetch_url(current_url)
-
         if result.error:
             stats.errors += 1
             print(f"  WARN: {result.error}")
@@ -388,6 +403,7 @@ def web_search_and_ingest(query: str, index, limit: int = 5, crawl_depth: int = 
     """Search the web and ingest the relevant, non-junk result pages."""
     search_terms = clean_search_query(query)
     fallback_terms = search_keyword_fallback(query)
+
     intent = detect_intent(query)
     print(f"Detected intent: {describe_intent(intent, query)}")
     if search_terms != query:
@@ -397,27 +413,29 @@ def web_search_and_ingest(query: str, index, limit: int = 5, crawl_depth: int = 
 
     topics = _topic_terms(search_terms) | _topic_terms(fallback_terms)
 
-    collected: List[Tuple[str, str]] = list(
-        search_public_web(search_terms, limit=limit, with_titles=True)
+    collected: List[Tuple[str, str, str]] = list(
+        search_public_web(search_terms, limit=limit, with_snippets=True)
     )
     if fallback_terms and fallback_terms != search_terms:
         print(f"Also searching keyword form: {fallback_terms!r}")
-        collected.extend(search_public_web(fallback_terms, limit=limit, with_titles=True))
+        collected.extend(search_public_web(fallback_terms, limit=limit, with_snippets=True))
 
-    kept_pairs = [(url, title) for url, title in collected if not _should_reject(url, topics)]
+    kept_pairs = [(url, title, snippet) for url, title, snippet in collected if not _should_reject(url, topics)]
     removed = len(collected) - len(kept_pairs)
     if removed:
         print(f"Filtered out {removed} off-topic/definition result(s) before crawling.")
 
     titles_map: Dict[str, str] = {}
-    for url, title in kept_pairs:
+    snippets_map: Dict[str, str] = {}
+    for url, title, snippet in kept_pairs:
         key = normalize_url(url)
         if key and title and key not in titles_map:
             titles_map[key] = title
+        if key and snippet and key not in snippets_map:
+            snippets_map[key] = snippet
 
-    kept = [url for url, _title in kept_pairs]
-    filtered = rank_results(kept, topics, query, titles=titles_map)[:limit]
-
+    kept = [url for url, _title, _snippet in kept_pairs]
+    filtered = rank_results(kept, topics, query, titles=titles_map, snippets=snippets_map)[:limit]
     if not filtered:
         print("No usable public search results were found or the provider was unavailable.")
         return 0
@@ -442,6 +460,3 @@ __all__ = [
     "explain_ranking", "rank_results", "score_result",
     "search_keyword_fallback", "web_search_and_ingest",
 ]
-
-
-
