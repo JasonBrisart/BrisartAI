@@ -6,7 +6,8 @@ Purpose
 The single chokepoint every web page must pass through to get indexed:
 normalize the query, rank the resulting URLs, filter out known-junk
 hosts and off-topic disambiguation pages, respect robots.txt, fetch and
-de-duplicate content, and add the survivors to the index.
+de-duplicate content, apply a positive content-relevance gate, and add
+the survivors to the index.
 
 Communication / relationships
 ------------------------------
@@ -25,6 +26,10 @@ Settings / parameters
 - DEFAULT_DELAY_SECONDS (1.0).
 - INTENT_WEIGHT (2) / PHRASE_MATCH_BONUS (4).
 - _INTENT_HINTS.
+- PAGE_RELEVANCE_SCAN_CHARS (5000): how much of a fetched page's body
+  the crawl-time relevance gate scans for topic vocabulary (title is
+  always scanned in full). Bounded so a very large page does not make
+  the gate expensive.
 
 Edge cases
 ----------
@@ -36,24 +41,59 @@ Edge cases
   it is byte-identical to prior behavior. A term matched only in the
   snippet (not path/host/title) contributes a smaller score bump than a
   title match, per KI-006's resolution.
+- crawl_urls_to_index() applies a POSITIVE content-relevance gate
+  (_page_is_on_topic) after a page is fetched but before it is indexed:
+  a page whose title+body shares NO topic vocabulary with the query --
+  by whole word, single-'s' plural fold, OR shared stem -- is dropped
+  and never enters the index (see Fix 1). The gate is deliberately
+  permissive: it only drops a page that matches NONE of those tests, so
+  it can never drop a page that shares real topic vocabulary with the
+  query that found it. When topic_terms is empty (nothing to gate on)
+  every page is kept, exactly as before.
 
 Known limitations
 -----------------
-- Ranking here mirrors the local ranker's intent/phrase signals for web
-  results but operates on fetched snippets/pages, so its scores are only
-  as good as the fetched text.
+- The relevance gate is lexical (whole-word/plural/stem overlap), not
+  semantic; a genuinely relevant page phrased with entirely different
+  vocabulary than the query would be dropped, and a page that merely
+  mentions a topic word in passing is kept. It is a junk-decoy filter,
+  not a fine-grained ranker -- fine-grained ordering remains ranking's
+  job at query time.
 - Crawl politeness is a fixed DEFAULT_DELAY_SECONDS plus robots policy;
   there is no adaptive rate limiting per host.
 - search_keyword_fallback() is a lexical fallback; it cannot recover
   results a provider never returned.
 
+Fix 1 (2026-09-16): Off-topic pages could be permanently ingested into
+the local index. crawl_urls_to_index() only rejected known-junk HOSTS
+(is_junk_web_source / _should_reject) before indexing; it never checked
+whether a fetched page's actual CONTENT was related to the query. When a
+search provider was throttled and returned decoy pages (or an otherwise-
+unrelated page slipped through host filtering), that page was fetched,
+passed the host check, and was written into brisart_ai_index.sqlite3
+permanently -- polluting every future query, since the index persists
+across sessions (this was tracked as KI-002). Fixed by adding a positive
+content-relevance gate, _page_is_on_topic(), applied after fetch and
+before indexing: a page whose title+body shares no whole-word / plural /
+stemmed topic term with the query is dropped (counted as
+stats.skipped_offtopic) instead of indexed. The gate matches the
+whole-word + single-'s' plural-fold approach web/search.py's
+_partition_related_results() already uses, extended with the crawler's
+own _stem(), and is permissive by construction so it can never drop a
+page that shares real topic vocabulary with the query.
+
 Examples
 --------
     >>> clean_search_query("  who founded microsoft??  ")
     'who founded microsoft'
+    >>> _page_is_on_topic("Book a Taxi", "Reserve your ride now.", {"cats"})
+    False
+    >>> _page_is_on_topic("Pet cat stats", "73.8 million cats.", {"cats"})
+    True
     >>> # full ingest requires network + an index
     >>> web_search_and_ingest("who founded microsoft", index)   # doctest: +SKIP
 """
+
 from __future__ import annotations
 
 import queue
@@ -85,6 +125,7 @@ _INTENT_HINTS: Tuple[Tuple[Tuple[str, ...], str], ...] = (
 
 _QUERY_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-']*")
 _URL_WORD = re.compile(r"[A-Za-z0-9]+")
+
 _STEM_SUFFIXES = (
     "ations", "ation", "ings", "ing", "ors", "or", "ers", "er",
     "ions", "ion", "ed", "es", "s",
@@ -138,6 +179,35 @@ def _topic_terms(cleaned_query: str) -> Set[str]:
 
 INTENT_WEIGHT = 2
 PHRASE_MATCH_BONUS = 4
+PAGE_RELEVANCE_SCAN_CHARS = 5000
+
+
+def _page_is_on_topic(title: str, text: str, topic_terms: Set[str]) -> bool:
+    """Positive content-relevance gate for a fetched page (see Fix 1).
+
+    True when the page's title + (bounded) body shares at least one
+    meaningful query term with `topic_terms` -- by exact whole word, by a
+    symmetric single-'s' plural fold, or by shared stem. Deliberately
+    PERMISSIVE: only a page matching NONE of those tests is judged
+    off-topic, so a page sharing real topic vocabulary is never dropped.
+    An empty `topic_terms` (nothing to gate on) always returns True, and
+    a page with no extractable words returns False."""
+    if not topic_terms:
+        return True
+    haystack = f"{title or ''} {str(text or '')[:PAGE_RELEVANCE_SCAN_CHARS]}"
+    page_tokens = {word.casefold() for word in _URL_WORD.findall(haystack)}
+    if not page_tokens:
+        return False
+    page_stems = {_stem(token) for token in page_tokens}
+    for term in topic_terms:
+        term = term.casefold()
+        if term in page_tokens:
+            return True
+        if (term + "s") in page_tokens or (term.endswith("s") and term[:-1] in page_tokens):
+            return True
+        if _stem(term) in page_stems:
+            return True
+    return False
 
 
 def score_result(url: str, topic_terms: Set[str], query: str = "", title: str = "", snippet: str = "") -> int:
@@ -151,7 +221,6 @@ def _score_detail(url: str, topic_terms: Set[str], query: str = "", title: str =
         parts = brisart_urlsplit(url)
     except ValueError:
         return (0, -100)
-
     host = (parts.hostname or "").casefold()
     path = (parts.path or "").casefold()
     path_words = set(_URL_WORD.findall(path))
@@ -180,15 +249,12 @@ def _score_detail(url: str, topic_terms: Set[str], query: str = "", title: str =
             # smaller bump than a title match earns.
             score += 1
             matched_terms += 1
-
     if matched_terms > 1:
         score += 2 * (matched_terms - 1)
-
     if matched_terms and any(
         ("-" in seg or "_" in seg) for seg in path.split("/") if len(seg) > 8
     ):
         score += 2
-
     if any(host.startswith(prefix) for prefix in ACCOUNT_HOST_PREFIXES):
         score -= 4
     if topic_terms and not matched_terms:
@@ -197,13 +263,11 @@ def _score_detail(url: str, topic_terms: Set[str], query: str = "", title: str =
         score -= 4
     if any(marker in path for marker in LISTING_PATH_MARKERS):
         score -= 3
-
     if query:
         phrase_haystack = f"{_intent_text(url)} {title or ''} {snippet or ''}"
         phrase_factor, _phrase_hits = phrase_match_adjust(query, phrase_haystack)
         if phrase_factor != 1.0:
             score += PHRASE_MATCH_BONUS
-
     if query:
         intent = detect_intent(query)
         if intent != INTENT_GENERAL:
@@ -211,7 +275,6 @@ def _score_detail(url: str, topic_terms: Set[str], query: str = "", title: str =
                 f"{_intent_text(url)} {title or ''} {snippet or ''}", intent, query, topic_terms=topic_terms,
             )
             score += int(round(delta * INTENT_WEIGHT))
-
     return (matched_terms, score)
 
 
@@ -264,19 +327,16 @@ def explain_ranking(
         snippet = (snippets or {}).get(key, "")
         matched, total = _score_detail(url, topic_terms, query, title, snippet)
         _base_matched, base = _score_detail(url, topic_terms, "", "")
-
         if intent != INTENT_GENERAL:
             delta, boosts, penalties = score_intent(
                 f"{_intent_text(url)} {title or ''} {snippet or ''}", intent, query, topic_terms=topic_terms,
             )
         else:
             delta, boosts, penalties = (0.0, [], [])
-
         phrase_matched = False
         if query:
             phrase_factor, _hits = phrase_match_adjust(query, f"{_intent_text(url)} {title or ''} {snippet or ''}")
             phrase_matched = phrase_factor != 1.0
-
         rows.append({
             "url": url, "title": title, "position": position,
             "terms_matched": matched, "base_score": base,
@@ -309,7 +369,13 @@ def crawl_urls_to_index(
     delay: float = DEFAULT_DELAY_SECONDS, same_domain_only: bool = True,
     topic_terms: Set[str] | None = None,
 ) -> int:
-    """Crawl public URLs and add extracted text to the BrisartAI index."""
+    """Crawl public URLs and add extracted text to the BrisartAI index.
+
+    Every fetched page must pass a positive content-relevance gate
+    (_page_is_on_topic) before it is indexed: a page whose title+body
+    shares no topic vocabulary with the query is dropped rather than
+    permanently ingested (see Fix 1). The gate is skipped only when
+    topic_terms is empty (nothing to gate on)."""
     try:
         crawl_limit = max(1, int(limit))
     except (TypeError, ValueError):
@@ -343,14 +409,12 @@ def crawl_urls_to_index(
     while not pending.empty() and crawled < crawl_limit:
         current_url, level, root_url = pending.get()
         stats.requested += 1
-
         if _should_reject(current_url, topics):
             print(f"SKIP off-topic/definition result: {current_url}")
             continue
         if not robots.allowed(current_url):
             print(f"SKIP robots.txt: {current_url}")
             continue
-
         print(f"WEB FETCH depth={level}: {current_url}")
         result = fetch_url(current_url)
         if result.error:
@@ -361,7 +425,15 @@ def crawl_urls_to_index(
             stats.skipped_empty += 1
             print("  WARN: page contained no extractable text")
             continue
-
+        # Positive content-relevance gate (Fix 1): refuse to index a page
+        # whose content shares no topic vocabulary with the query, so a
+        # throttled/decoy or otherwise-unrelated page can never enter the
+        # index and pollute future queries. Permissive by construction --
+        # a page sharing any real topic term is kept.
+        if not _page_is_on_topic(result.title, result.text, topics):
+            stats.skipped_offtopic += 1
+            print("  SKIP off-topic page content (shares no topic vocabulary with the query)")
+            continue
         content_hash = stable_hash(result.text)
         if content_exists(index, content_hash):
             stats.skipped_duplicates += 1
@@ -377,7 +449,6 @@ def crawl_urls_to_index(
                 crawled += 1
                 stats.indexed += 1
                 print(f"  OK: {len(result.text)} chars, {len(result.links)} links")
-
         if level < crawl_depth:
             for link in result.links:
                 normalized_link = normalize_url(link)
@@ -391,7 +462,6 @@ def crawl_urls_to_index(
                     continue
                 seen.add(normalized_link)
                 pending.put((normalized_link, level + 1, root_url))
-
         if crawl_delay:
             time.sleep(crawl_delay)
 
@@ -403,7 +473,6 @@ def web_search_and_ingest(query: str, index, limit: int = 5, crawl_depth: int = 
     """Search the web and ingest the relevant, non-junk result pages."""
     search_terms = clean_search_query(query)
     fallback_terms = search_keyword_fallback(query)
-
     intent = detect_intent(query)
     print(f"Detected intent: {describe_intent(intent, query)}")
     if search_terms != query:

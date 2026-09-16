@@ -3,7 +3,7 @@ File: brisart_ai/web/stats.py
 
 Purpose
 -------
-Defines CrawlStats, five counters for one crawl run plus print_summary().
+Defines CrawlStats, six counters for one crawl run plus print_summary().
 
 Communication / relationships
 ------------------------------
@@ -11,7 +11,8 @@ Communication / relationships
 
 Settings / parameters
 ----------------------
-- requested, indexed, skipped_duplicates, skipped_empty, errors.
+- requested, indexed, skipped_duplicates, skipped_empty,
+  skipped_offtopic, errors.
 
 Edge cases
 ----------
@@ -27,9 +28,10 @@ Known limitations
 Examples
 --------
     >>> st = CrawlStats()
-    >>> st.record_fetch(ok=True)                  # doctest: +SKIP
-    >>> st.as_dict()                              # doctest: +SKIP
+    >>> st.indexed += 1
+    >>> st.print_summary()                        # doctest: +SKIP
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -41,6 +43,7 @@ class CrawlStats:
     indexed: int = 0
     skipped_duplicates: int = 0
     skipped_empty: int = 0
+    skipped_offtopic: int = 0
     errors: int = 0
 
     def print_summary(self) -> None:
@@ -51,7 +54,5 @@ class CrawlStats:
         print(f"Indexed: {self.indexed}")
         print(f"Duplicates: {self.skipped_duplicates}")
         print(f"Empty pages: {self.skipped_empty}")
+        print(f"Off-topic pages: {self.skipped_offtopic}")
         print(f"Errors: {self.errors}")
-
-
-
