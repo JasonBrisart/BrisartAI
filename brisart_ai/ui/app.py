@@ -22,6 +22,20 @@ Edge cases
 ----------
 - run() wraps app construction in a single try/except.
 - _answer_question() runs on a background thread.
+
+Known limitations
+-----------------
+- Tkinter desktop shell; requires a display and cannot run headless
+  (tests exercise the service layer, not this window).
+- Single-window, single-session UI; there is no multi-tab or multi-user
+  support.
+- Long-running search/ingest work is driven through BrisartService; the
+  UI thread can appear busy during large synchronous operations.
+
+Examples
+--------
+    >>> # launched from the console entry point, not imported for use
+    >>> run()                                     # doctest: +SKIP
 """
 from __future__ import annotations
 
@@ -202,3 +216,5 @@ def run(db_path: str = DEFAULT_DB) -> None:
 
 
 __all__ = ["BrisartApp", "run"]
+
+

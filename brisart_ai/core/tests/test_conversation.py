@@ -1,4 +1,44 @@
-"""Tests for brisart_ai/core/conversation.py -- build_conversation_answer()."""
+"""
+File: brisart_ai/core/tests/test_conversation.py
+
+Purpose
+-------
+Unit tests for brisart_ai.core.conversation. Verifies the module's public
+behavior and its documented edge cases so regressions are caught
+before release. Contains 6 test cases across TestBuildConversationAnswer.
+
+Communication / relationships
+------------------------------
+- exercises brisart_ai.core.conversation (build_conversation_answer)
+- exercises brisart_ai.core.session_memory (SessionMemory)
+- exercises brisart_ai.core.settings (ResearchSettings)
+- exercises brisart_ai.knowledge.index (Index)
+
+Settings / parameters
+---------------------
+- Standard unittest.TestCase suite; run with pytest
+  (--import-mode=importlib) or `python -m pytest`.
+- Uses only in-memory / temp-dir fixtures where any state is
+  needed; no network, no external services, no shared global state.
+- No tunable parameters of its own; assertions pin the behavior
+  and point values defined in the module under test.
+
+Edge cases
+----------
+- asserts: empty index returns no information message.
+
+Known limitations
+-----------------
+- Covers the behaviors enumerated above; paths not listed here are
+  not asserted by this file and may be covered elsewhere.
+- Deterministic and offline by design; it does not exercise real
+  network, GUI display, or concurrency behavior.
+
+Examples
+--------
+    $ python -m pytest brisart_ai/core/tests/test_conversation.py -v
+    $ python -m pytest brisart_ai/core/tests/test_conversation.py --import-mode=importlib
+"""
 import tempfile
 import unittest
 from pathlib import Path
@@ -76,3 +116,5 @@ class TestBuildConversationAnswer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+

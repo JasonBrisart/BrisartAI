@@ -25,6 +25,24 @@ Edge cases
 - add_source() raises ValueError for missing type/location, returns
   False for empty text.
 - purge_junk_web_sources() only touches source_type = 'web' rows.
+
+Known limitations
+-----------------
+- Single-file SQLite index; concurrency is bounded by SQLite WAL, not a
+  server-grade engine.
+- Term indexing is exact-token based (via util.tokenize); it stores no
+  positions, so phrase/proximity signals are recomputed at query time
+  from the stored text, not from the term table.
+- purge_junk_web_sources() only removes rows matching blocklist rules at
+  call time; it does not re-run automatically on insert.
+
+Examples
+--------
+    >>> idx = Index(":memory:")
+    >>> idx.add_source("file", "/a.txt", "A", "the giraffe is tall")
+    True
+    >>> idx.source_count()
+    1
 """
 from __future__ import annotations
 
@@ -175,3 +193,5 @@ class Index:
 
 
 __all__ = ["DEFAULT_DB", "Index"]
+
+

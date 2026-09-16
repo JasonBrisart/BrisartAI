@@ -1,4 +1,42 @@
-"""Tests for brisart_ai/web/crawler.py -- query cleaning, scoring, and ranking (no live network)."""
+"""
+File: brisart_ai/web/tests/test_crawler.py
+
+Purpose
+-------
+Unit tests for brisart_ai.web.crawler. Verifies the module's public
+behavior and its documented edge cases so regressions are caught
+before release. Contains 23 test cases across TestCleanSearchQuery, TestSearchKeywordFallback, TestTopicTerms, TestScoreResult, TestRankResults, TestShouldReject, TestContentExists.
+
+Communication / relationships
+------------------------------
+- exercises brisart_ai.knowledge.index (Index)
+- exercises brisart_ai.web.crawler (clean_search_query, content_exists, rank_results, score_result, search_keyword_fallback, _should_reject)
+
+Settings / parameters
+---------------------
+- Standard unittest.TestCase suite; run with pytest
+  (--import-mode=importlib) or `python -m pytest`.
+- Uses only in-memory / temp-dir fixtures where any state is
+  needed; no network, no external services, no shared global state.
+- No tunable parameters of its own; assertions pin the behavior
+  and point values defined in the module under test.
+
+Edge cases
+----------
+- asserts: empty query returns empty.
+
+Known limitations
+-----------------
+- Covers the behaviors enumerated above; paths not listed here are
+  not asserted by this file and may be covered elsewhere.
+- Deterministic and offline by design; it does not exercise real
+  network, GUI display, or concurrency behavior.
+
+Examples
+--------
+    $ python -m pytest brisart_ai/web/tests/test_crawler.py -v
+    $ python -m pytest brisart_ai/web/tests/test_crawler.py --import-mode=importlib
+"""
 import tempfile
 import unittest
 from pathlib import Path
@@ -139,3 +177,5 @@ class TestContentExists(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+

@@ -16,6 +16,19 @@ Settings / parameters
 Edge cases
 ----------
 - All fields default to 0.
+
+Known limitations
+-----------------
+- CrawlStats is an in-memory counter object for one crawl run; it is not
+  persisted and resets each run.
+- Counts are advisory instrumentation, not a guarantee of exact-once
+  accounting under concurrent updates.
+
+Examples
+--------
+    >>> st = CrawlStats()
+    >>> st.record_fetch(ok=True)                  # doctest: +SKIP
+    >>> st.as_dict()                              # doctest: +SKIP
 """
 from __future__ import annotations
 
@@ -39,3 +52,5 @@ class CrawlStats:
         print(f"Duplicates: {self.skipped_duplicates}")
         print(f"Empty pages: {self.skipped_empty}")
         print(f"Errors: {self.errors}")
+
+

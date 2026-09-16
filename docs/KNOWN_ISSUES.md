@@ -104,6 +104,48 @@ Fully fixed issues are **moved** to the [Resolved](#resolved) section at the bot
 
 ---
 
+## KI-010: Relevance feedback is wired into ranking but has no UI affordance to mark results
+
+- **Reported date:** 2026-09-16
+- **Severity:** Low (feature-completeness gap, not a defect)
+- **Environment:** All platforms; desktop UI only.
+- **Component:** `brisart_ai/knowledge/relevance_feedback.py`, `brisart_ai/ui/service.py`, `brisart_ai/ui/chat_panel.py`
+- **Steps to Reproduce:** Run the app, ask a question, and look for a way to tell BrisartAI that a returned source was relevant or irrelevant.
+- **Expected behavior:** A user marks a cited source good/bad, and subsequent searches in the same session nudge similar sources up or down.
+- **Actual behavior:** `BrisartService` owns a single session-lifetime `RelevanceFeedback` store and applies it to every ranked search, and `BrisartService.mark_relevant()` / `mark_irrelevant()` exist and work, but `ui/chat_panel.py` renders the transcript as plain text with no control that calls them. The feedback loop is therefore fully wired on the engine side but unreachable from the GUI, so the store stays empty in normal use and has no effect on ranking (multiplier 1.0).
+- **Tried / Ruled out:** The store was deliberately built engine-first and bounded (`+/-25%`, clamped per-term) so it is safe to always apply before any UI exists; wiring it into ranking without a trigger was the intended first step, not an oversight in the ranking layer itself.
+- **Next step:** Add a per-source mark-relevant / mark-irrelevant control to `ui/chat_panel.py` that calls the existing `BrisartService` methods, closing the loop end to end. (Session-scoped only; cross-session persistence is a separate, larger design question and explicitly out of scope for this issue.)
+
+---
+
+## KI-011: Recency ranking signal uses index time, not document publication date
+
+- **Reported date:** 2026-09-16
+- **Severity:** Low (documented limitation, not a defect)
+- **Environment:** All platforms; ranking only.
+- **Component:** `brisart_ai/knowledge/ranker.py` (`_recency_multiplier`, `RECENCY_MAX_BOOST`, `RECENCY_HALFLIFE_DAYS`), `brisart_ai/web/crawler.py`
+- **Steps to Reproduce:** Index an old document today and a genuinely newer document that was indexed earlier; ask a question both answer.
+- **Expected behavior:** N/A — freshness is a bounded nudge, not a hard sort key.
+- **Actual behavior:** The recency multiplier (up to `+8%`, 45-day half-life) is computed from a source's `indexed_at` timestamp — when it entered the local index — not from the document's own publication/last-modified date. A stale document imported today therefore reads as "fresh," and a genuinely recent document indexed weeks ago reads as "old." On a uniform-timestamp corpus (e.g. a bulk import) the signal is inert by construction, so this only matters for mixed-age corpora built up over time.
+- **Tried / Ruled out:** Using a real publication date was considered and deferred: `web/crawler.py` and `io/` do not reliably extract a trustworthy per-document date across the formats and pages BrisartAI ingests, and a *wrong* date is worse than a consistent, explainable index-time proxy. The multiplier is deliberately bounded so this can never override the term-based score.
+- **Next step:** Extract a document publication/last-modified date where one is reliably available (HTTP `Last-Modified`, common HTML meta tags, filesystem mtime for local files), store it alongside `indexed_at`, and prefer it for the recency signal when present — falling back to `indexed_at` otherwise.
+
+---
+
+## KI-012: Contradiction detection is limited to numeric and negation mismatches
+
+- **Reported date:** 2026-09-16
+- **Severity:** Low (inherent limitation, not a defect)
+- **Environment:** All platforms; answer synthesis only.
+- **Component:** `brisart_ai/knowledge/confidence.py` (`detect_contradictions`, `detect_negation_contradiction`, `_NUMERIC_CLAIM_RE`), `brisart_ai/knowledge/synthesizer.py`
+- **Steps to Reproduce:** Ask a question whose two best sources disagree qualitatively (e.g. one calls a process "fast" and another "slow") with no conflicting number and no negation.
+- **Expected behavior:** N/A — full semantic contradiction detection is a documented non-goal for a retrieval-and-extraction system that never interprets meaning.
+- **Actual behavior:** The "sources disagree…" caveat and the confidence contradiction-penalty fire only for two narrow cases: two sources giving different numbers for the same leading subject keyword (`_NUMERIC_CLAIM_RE`), or one source affirming and another negating the same query term. A purely qualitative disagreement, or a numeric one where the subject is worded differently in each sentence, is not detected, so the answer may present both claims without a caution line.
+- **Tried / Ruled out:** A general "do these two sentences contradict?" classifier was rejected as out of scope and out of character for the project — it would require the kind of language understanding BrisartAI deliberately does not attempt, and a false contradiction flag on two compatible sentences is worse than a missed subtle one.
+- **Next step:** None planned beyond incremental widening of `_NUMERIC_CLAIM_RE`'s subject matching as real misses are observed; documented here so the narrow scope is never mistaken for a bug during future confidence-layer work.
+
+---
+
 ## Template
 
 Use this template for new entries:

@@ -31,6 +31,23 @@ Edge cases
 - _stem(): crude suffix stripper.
 - Article-slug bonus checks both "-" and "_".
 - content_exists() swallows any exception, returns False.
+
+Known limitations
+-----------------
+- Ranking here mirrors the local ranker's intent/phrase signals for web
+  results but operates on fetched snippets/pages, so its scores are only
+  as good as the fetched text.
+- Crawl politeness is a fixed DEFAULT_DELAY_SECONDS plus robots policy;
+  there is no adaptive rate limiting per host.
+- search_keyword_fallback() is a lexical fallback; it cannot recover
+  results a provider never returned.
+
+Examples
+--------
+    >>> clean_search_query("  who founded microsoft??  ")
+    'who founded microsoft'
+    >>> # full ingest requires network + an index
+    >>> web_search_and_ingest("who founded microsoft", index)   # doctest: +SKIP
 """
 from __future__ import annotations
 
@@ -425,3 +442,5 @@ __all__ = [
     "explain_ranking", "rank_results", "score_result",
     "search_keyword_fallback", "web_search_and_ingest",
 ]
+
+

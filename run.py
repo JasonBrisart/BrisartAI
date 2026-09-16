@@ -34,6 +34,18 @@ Edge cases
 - The `if __name__ == "__main__":` guard means importing this module
   from elsewhere (which nothing in the codebase currently does) would
   not launch the GUI as a side effect.
+
+Known limitations
+-----------------
+- Console entry point only; it wires up and launches the app and holds no
+  business logic worth unit-testing.
+- Assumes a display is available for the Tkinter UI; there is no headless
+  or server mode from this entry point.
+
+Examples
+--------
+    $ python run.py            # launch the desktop app
+    >>> # not intended to be imported as a library
 """
 from __future__ import annotations
 
@@ -42,3 +54,4 @@ from brisart_ai.ui.app import run
 
 if __name__ == "__main__":
     run(DEFAULT_DB)
+

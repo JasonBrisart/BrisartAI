@@ -21,6 +21,23 @@ Edge cases
 - Empty text skipped and not counted.
 - Hash failure logged but doesn't block indexing.
 - Any read/index failure caught and logged per-file.
+
+Known limitations
+-----------------
+- ingest_paths() indexes only files readers.is_supported() recognizes;
+  unsupported files are silently skipped.
+- Content de-duplication is by (source_type, location) key and content
+  hash; two different locations with identical text are stored twice.
+- Ingestion is synchronous and single-threaded; very large batches block
+  the caller for the duration.
+
+Examples
+--------
+    >>> from brisart_ai.knowledge.index import Index
+    >>> idx = Index(":memory:")
+    >>> count = ingest_paths(["./docs"], idx)   # doctest: +SKIP
+    >>> isinstance(count, int)                  # doctest: +SKIP
+    True
 """
 from __future__ import annotations
 
@@ -66,3 +83,5 @@ def ingest_paths(paths: Iterable[str], index) -> int:
 
 
 __all__ = ["ingest_paths"]
+
+

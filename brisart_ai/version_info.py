@@ -31,6 +31,19 @@ Edge cases
   the same failure-tolerant contract the previous version.txt-reading
   implementation had.
 - Project root located relative to this file's own path (parents[1]).
+
+Known limitations
+-----------------
+- Reads the version string from the packaged VERSION file with a
+  hard-coded fallback; a missing/malformed file yields _FALLBACK_VERSION,
+  never an exception.
+- Exposes app metadata constants only; it performs no update checks.
+
+Examples
+--------
+    >>> from brisart_ai import version_info
+    >>> isinstance(version_info.APP_NAME, str)
+    True
 """
 from __future__ import annotations
 
@@ -60,3 +73,5 @@ def _read_version() -> str:
 __version__ = _read_version()
 
 __all__ = ["APP_NAME", "__version__"]
+
+

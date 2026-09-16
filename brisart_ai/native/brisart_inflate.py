@@ -64,6 +64,23 @@ Edge cases
   BrisartAI's own PDF-decompression use case never produces one and
   silently ignoring it would risk a wrong (rather than a failing)
   decompression.
+
+Known limitations
+-----------------
+- Implements RFC 1950/1951 (zlib + DEFLATE) decompression only; there is
+  no compression path.
+- Whole-buffer decode into memory; there is no streaming API for inputs
+  larger than available RAM.
+- Pure-Python bit reader: correct but markedly slower than zlib's C
+  implementation on large payloads.
+
+Examples
+--------
+    >>> import zlib
+    >>> brisart_zlib_decompress(zlib.compress(b"hello world"))
+    b'hello world'
+    >>> brisart_adler32(b"hello world") == zlib.adler32(b"hello world")
+    True
 """
 from __future__ import annotations
 
@@ -358,3 +375,5 @@ __all__ = [
     "brisart_inflate",
     "brisart_zlib_decompress",
 ]
+
+

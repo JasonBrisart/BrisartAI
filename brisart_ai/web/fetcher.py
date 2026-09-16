@@ -23,6 +23,21 @@ Edge cases
 ----------
 - Every failure mode is captured into the returned FetchResult.
 - normalize_url("") returns error="invalid URL" before any request.
+
+Known limitations
+-----------------
+- Enforces MAX_PAGE_BYTES and REQUEST_TIMEOUT; a page exceeding the cap
+  is truncated and a slow host is abandoned, so very large or slow pages
+  are only partially retrieved or skipped.
+- Follows the caller's policy for redirects/robots; it makes no
+  independent trust decisions.
+- Returns a FetchResult (never raises for ordinary network errors); the
+  caller inspects the result to detect failure.
+
+Examples
+--------
+    >>> res = fetch_url("https://example.com")    # doctest: +SKIP
+    >>> res.ok, len(res.text)                     # doctest: +SKIP
 """
 from __future__ import annotations
 
@@ -97,3 +112,5 @@ def fetch_url(url: str) -> FetchResult:
             url=normalized, status=0, content_type="", title="", text="",
             links=[], error=str(exc),
         )
+
+

@@ -22,6 +22,17 @@ Settings / parameters
 Edge cases
 ----------
 - A KeyboardInterrupt returns exit code 130.
+
+Known limitations
+-----------------
+- A developer harness that runs the fixed REGRESSION_QUERIES against a
+  live index and prints ranked explanations; it mutates nothing.
+- Output is for human inspection; it asserts nothing and is not a test.
+
+Examples
+--------
+    $ python scripts/debug_search_replay.py        # print ranked results
+    >>> main()                                      # doctest: +SKIP
 """
 from __future__ import annotations
 
@@ -171,3 +182,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

@@ -71,6 +71,24 @@ Edge cases
   value is silently ignored, but the line still counts as "a rule was
   seen" for group-continuation purposes, exactly like the class being
   replaced.
+
+Known limitations
+-----------------
+- Implements the classic robots.txt exclusion protocol (User-agent /
+  Allow / Disallow, longest-match, first-match precedence); it does not
+  implement Crawl-delay throttling or Sitemap directives beyond parsing.
+- Wildcard support is limited to the widely-supported '*' and '$'
+  conventions, not arbitrary regular expressions.
+- A malformed or unreachable robots file is treated permissively by the
+  caller (web/policy.py decides the fail-open/closed policy).
+
+Examples
+--------
+    >>> pol = BrisartRobotsPolicy("User-agent: *\nDisallow: /private")
+    >>> pol.can_fetch("BrisartBot", "/private/x")
+    False
+    >>> pol.can_fetch("BrisartBot", "/public/x")
+    True
 """
 from __future__ import annotations
 
@@ -263,3 +281,5 @@ if __name__ == "__main__":
 
 
 __all__ = ["BrisartRobotsPolicy"]
+
+

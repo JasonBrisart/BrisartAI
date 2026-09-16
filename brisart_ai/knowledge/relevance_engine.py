@@ -27,6 +27,26 @@ Edge cases
 ----------
 - rarity_weight()/presence_points() return 0.0 for zero occurrences.
 - shape_multiplier() guards average_length <= 0 by returning 1.0.
+
+Known limitations
+-----------------
+- The rarity, presence, and shape tiers are fixed hand-tuned tables, not
+  learned; they encode the engine's opinions about corpus statistics and
+  are corpus-agnostic by design.
+- Presence saturation caps repeated-term credit deliberately, so a
+  document that legitimately repeats a term many times gains no extra
+  weight beyond the top tier.
+- proximity_bonus() is character-window based (PROXIMITY_WINDOW_CHARS)
+  and capped (PROXIMITY_BONUS_CAP); it rewards nearness, not order.
+
+Examples
+--------
+    >>> rarity_weight(1, 1000) > rarity_weight(500, 1000)
+    True
+    >>> presence_points(50) == presence_points(8)   # both hit the top tier
+    True
+    >>> term_contribution(4, 10, 1000) > 0
+    True
 """
 from __future__ import annotations
 
@@ -141,3 +161,5 @@ __all__ = [
     "presence_points", "proximity_bonus", "rarity_weight", "shape_multiplier",
     "term_contribution",
 ]
+
+

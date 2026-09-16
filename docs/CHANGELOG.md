@@ -4,6 +4,147 @@ All notable changes to BrisartAI are documented in this file, oldest release at 
 
 ---
 
+## [1.2.0] - 2026-09-16
+
+Adds a substantial answer-quality layer to the retrieval pipeline — nine new
+pure-Python modules wired directly into the standard ranking and synthesis
+path, plus a significantly expanded intent classifier. Every new signal is
+part of the base ranking behavior: there are no flags to turn any of it on or
+off, nothing to configure, and nothing that runs only in a special mode. It
+all runs on every search. No existing ranking regression changed, because
+each new signal is additive and bounded (a nudge, never a hard filter or
+override) and none of them can displace the single best answer — consistent
+with the "intent is a hint, not a filter" principle already established in
+the ranker.
+
+### Added
+
+**Query understanding — spelling correction and term expansion.**
+`brisart_ai/spelling.py` adds a from-scratch, pure-Python Levenshtein
+implementation with a length-scaled edit-distance budget that suggests
+corrections for a query term with zero document frequency in the index; the
+correction is searched *alongside* the literal term the user typed, never in
+place of it, and a `did_you_mean` map rides on every result.
+`brisart_ai/text_normalize.py` adds punctuation/hyphenation normalization plus
+a finite, hand-maintained acronym and synonym registry and conservative
+(matching-only) morphology, so "co-founder"/"cofounder" and "AI"/"artificial
+intelligence" are recognized as the same concept. Both run inside
+`knowledge/ranker.py`'s `search()` on every query; expansion-only terms carry
+reduced weight (`EXPANSION_WEIGHT = 0.5`) and are excluded from coverage so the
+single best answer is never displaced.
+
+**Broader intent classification.** `brisart_ai/intent.py` now recognizes
+eleven intent types instead of six: alongside founder, inventor, statistic,
+explanation, comparison, and general questions, it also classifies
+definition, procedure, evidence, validation, and implementation questions,
+each with its own boost/penalty vocabulary. It also detects negation spans in
+text (so "Microsoft was **not** founded by Gates alone" is recognized as
+negating "founded") and can report every plausible intent for a query with a
+confidence score, not just the single best guess — used by the synthesis
+layer's negation-aware sentence selection below.
+
+**Source-type and freshness signals in ranking.**
+`brisart_ai/knowledge/authority.py` classifies a source's host into a fixed
+authority tier (encyclopedic, governmental/academic, established-news,
+neutral, low-value) and returns a bounded `[0.85, 1.20]` ranking multiplier —
+a source-type signal complementary to the existing term-based signals. A
+bounded recency signal (`RECENCY_MAX_BOOST = 0.08`, 45-day half-life) gives
+the freshest indexed source a small edge; a uniform-timestamp corpus is
+unaffected. Both are applied in `ranker.py` on every search as additional
+factors in the standard signal stack.
+
+**Answer trust — confidence, contradiction detection, and corroboration.**
+`brisart_ai/knowledge/confidence.py` computes an overall confidence score
+(weighted over distinct-source count, source authority tier, corroboration,
+and a contradiction penalty; `CONFIDENCE_WEIGHTS` sum to 1.0) and detects
+numeric and affirm-vs-negate contradictions among the chosen sentences.
+`brisart_ai/knowledge/citation_graph.py` tracks which sources were cited
+together for which topic, so "three sentences from one source" is
+distinguishable from genuine three-way corroboration. Both run inside
+`knowledge/synthesizer.py`, which now appends a "Confidence: <band> (<pct>),
+from N sources." line and a "sources disagree…" caveat when a numeric
+contradiction is detected.
+
+**Negation-aware synthesis.** `knowledge/synthesizer.py` uses `intent.py`'s
+negation-span detection to down-weight (`NEGATION_PENALTY = 0.35`) a sentence
+that *negates* a meaningful query term rather than quoting it as though it
+affirmed the claim. Deliberately not applied to validation/fact-check
+questions, which want negation.
+
+**Compound-question decomposition.**
+`brisart_ai/knowledge/query_decomposition.py` conservatively splits a
+compound question ("who founded Microsoft *and* when was it founded?") into
+independent sub-questions when — and only when — both halves independently
+look question-shaped, so a compound *subject* ("Bill Gates and Paul Allen") is
+never split. `core/conversation.py` runs one search + synthesize pass per
+sub-question, sharing a single citation graph across them.
+
+**Result diversity and session relevance feedback.**
+`brisart_ai/knowledge/diversity.py` runs a Maximal Marginal Relevance
+re-order as the final step of every ranked search, so the top results are not
+all near-duplicates of one another; it is a pure re-order and its first pick
+is always the highest-scored document, so the single best answer is
+unchanged. `brisart_ai/knowledge/relevance_feedback.py` is a bounded,
+session-scoped term-reweighting store that `BrisartService` owns for the
+app's lifetime and applies to every search; `BrisartService.mark_relevant()` /
+`mark_irrelevant()` record a user's judgement on a source, nudging subsequent
+ranking within `+/-25%`, and a store with no marks has no effect.
+
+**Entity canonicalization.** `brisart_ai/knowledge/entity_registry.py`
+canonicalizes named-entity surface forms ("Bill Gates" / "William H. Gates
+III") via title/suffix stripping plus an explicit alias table — no fuzzy
+matching, so it can only under-merge (safe), never wrong-merge.
+
+### Changed
+
+**`ranker.search()` runs the full stack unconditionally.** The signal stack
+(expansion, spelling, authority, recency, session feedback, MMR diversity) is
+part of the standard ranking path. `search()` takes no on/off flags for any of
+it: diversity always runs as the final re-order (`DIVERSIFY_LAMBDA = 0.7`),
+and the session `RelevanceFeedback` store `BrisartService` owns is applied on
+every call. The `feedback` store is threaded through `core/conversation.py`
+and owned by `ui/service.py`.
+
+### Verification
+
+- **Single-best-answer invariant:** the MMR diversity pass was verified across
+  10,000 randomized inputs to always return the highest-scored document first
+  and to drop nothing, so every founder/statistic/etc. regression that
+  asserts the top result is unaffected by diversity now running on every
+  search.
+- **Test suite:** the co-located suite passes
+  (`pytest --import-mode=importlib`), including new dedicated coverage for
+  spelling, text normalization, authority, citation graph, confidence,
+  diversity, entity registry, query decomposition, and relevance feedback,
+  plus new ranker/synthesizer cases for the signals above.
+- **Wiring confirmed:** `ranker.py` applies authority, recency, query
+  expansion, spelling, diversity, and feedback on every search;
+  `synthesizer.py` applies negation suppression, confidence, contradiction,
+  and citation-graph population; `conversation.py` decomposes compound
+  questions and threads the session feedback store through; `ui/service.py`
+  owns that store for the app's lifetime.
+
+### Known Limitations
+
+- Session relevance feedback lives for the running session and is not
+  persisted across restarts, and the `mark_relevant()` / `mark_irrelevant()`
+  service methods are not yet reachable from the desktop chat UI (see
+  KI-010).
+- The recency signal uses `indexed_at` (index time), not the document's own
+  publication date, which the crawler does not reliably extract (see
+  KI-011).
+- Contradiction detection catches only numeric and affirm-vs-negate
+  mismatches; purely qualitative disagreement is a documented non-goal (see
+  KI-012).
+- All new scoring weights and thresholds are hand-tuned constants, not
+  learned from labelled relevance judgements.
+- Ranking remains lexical: query expansion, spelling correction, and
+  morphology broaden matching, but there is no semantic/embedding retrieval,
+  so a genuinely relevant document sharing no surface vocabulary with the
+  query is still unreachable (a recall ceiling, not a ranking bug).
+
+---
+
 ## [1.1.0] - 2026-09-14
 
 Adds continuous integration: the automated test suite introduced in 1.0.0 now runs on every push and pull request instead of only on demand, and one real gap between that release's documentation and its actual shipped state is closed. No application, ranking, or retrieval behavior changed in this release — every change below is test-infrastructure and documentation work on top of the exact feature set shipped in 1.0.0.
@@ -415,3 +556,4 @@ Shifted BrisartAI from crawler-first to data-first architecture.
 ## [0.1.0-alpha]
 
 Initial crawler/index/retrieval prototype.
+

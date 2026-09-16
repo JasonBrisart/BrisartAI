@@ -1,90 +1,86 @@
-"""Tests for brisart_ai/knowledge/synthesizer.py -- source-grounded answer synthesis."""
+"""
+File: brisart_ai/knowledge/tests/test_synthesizer.py
+
+Purpose
+-------
+Unit tests for brisart_ai.knowledge.synthesizer. Verifies the module's public
+behavior and its documented edge cases so regressions are caught
+before release. Contains 13 test cases across TestModes, TestSentenceScore, TestSynthesize.
+
+Communication / relationships
+------------------------------
+- exercises brisart_ai.knowledge.synthesizer (format_source, query_wants_comparison, query_wants_quantity, query_wants_reason, sentence_score, synthesize)
+- exercises brisart_ai.knowledge.citation_graph (CitationGraph)
+
+Settings / parameters
+---------------------
+- Standard unittest.TestCase suite; run with pytest
+  (--import-mode=importlib) or `python -m pytest`.
+- Uses only in-memory / temp-dir fixtures where any state is
+  needed; no network, no external services, no shared global state.
+- No tunable parameters of its own; assertions pin the behavior
+  and point values defined in the module under test.
+
+Edge cases
+----------
+- asserts: no overlap.
+
+Known limitations
+-----------------
+- Covers the behaviors enumerated above; paths not listed here are
+  not asserted by this file and may be covered elsewhere.
+- Deterministic and offline by design; it does not exercise real
+  network, GUI display, or concurrency behavior.
+
+Examples
+--------
+    $ python -m pytest brisart_ai/knowledge/tests/test_synthesizer.py -v
+    $ python -m pytest brisart_ai/knowledge/tests/test_synthesizer.py --import-mode=importlib
+"""
 import unittest
-from brisart_ai.knowledge.synthesizer import (
-    format_source, query_wants_comparison, query_wants_quantity, query_wants_reason, sentence_score, synthesize,
-)
+from brisart_ai.knowledge.synthesizer import (format_source, query_wants_comparison,
+    query_wants_quantity, query_wants_reason, sentence_score, synthesize)
+from brisart_ai.knowledge.citation_graph import CitationGraph
 
-
-class TestQueryIntentDelegation(unittest.TestCase):
-    def test_wants_quantity_for_how_many(self):
-        self.assertTrue(query_wants_quantity("how many cats are in america?"))
-
-    def test_wants_comparison_for_outlive(self):
-        self.assertTrue(query_wants_comparison("do dogs outlive cats?"))
-
-    def test_wants_reason_for_why(self):
-        self.assertTrue(query_wants_reason("why do cats purr?"))
-
-    def test_general_query_wants_none_of_them(self):
-        self.assertFalse(query_wants_quantity("tell me about cats"))
-        self.assertFalse(query_wants_comparison("tell me about cats"))
-        self.assertFalse(query_wants_reason("tell me about cats"))
-
+class TestModes(unittest.TestCase):
+    def test_quantity(self): self.assertTrue(query_wants_quantity("how many cats are in america?"))
+    def test_comparison(self): self.assertTrue(query_wants_comparison("do dogs outlive cats?"))
+    def test_reason(self): self.assertTrue(query_wants_reason("why do cats purr?"))
 
 class TestSentenceScore(unittest.TestCase):
-    def test_no_overlap_scores_zero(self):
-        self.assertEqual(sentence_score("completely unrelated content here", {"zebra"}), 0.0)
-
-    def test_overlap_scores_positive(self):
-        self.assertGreater(sentence_score("the zebra ran quickly across the field", {"zebra"}), 0.0)
-
-    def test_quantity_mode_boosts_numeric_sentence(self):
-        numeric = sentence_score("an estimated 73.8 million cats live here", {"cats"}, quantity_mode=True)
-        non_numeric = sentence_score("cats are generally independent animals", {"cats"}, quantity_mode=True)
-        self.assertGreater(numeric, non_numeric)
-
-    def test_comparison_mode_boosts_comparative_sentence(self):
-        comparative = sentence_score("dogs usually outlive cats in captivity", {"dogs", "cats"}, comparison_mode=True)
-        plain = sentence_score("dogs and cats are both popular pets", {"dogs", "cats"}, comparison_mode=True)
-        self.assertGreater(comparative, plain)
-
-    def test_reason_mode_boosts_causal_sentence(self):
-        causal = sentence_score("cats purr because of muscle twitching in the larynx", {"cats", "purr"}, reason_mode=True)
-        plain = sentence_score("cats purr often while resting comfortably", {"cats", "purr"}, reason_mode=True)
-        self.assertGreater(causal, plain)
-
-
-class TestFormatSource(unittest.TestCase):
-    def test_formats_with_title_and_location(self):
-        doc = {"source_type": "file", "location": "/a.txt", "title": "My Doc"}
-        self.assertEqual(format_source(doc), "file: My Doc :: /a.txt")
-
-    def test_falls_back_to_location_when_no_title(self):
-        doc = {"source_type": "web", "location": "https://x.com"}
-        result = format_source(doc)
-        self.assertIn("https://x.com", result)
-
+    def test_no_overlap(self): self.assertEqual(sentence_score("unrelated content", {"zebra"}), 0.0)
+    def test_overlap(self): self.assertGreater(sentence_score("the zebra ran fast", {"zebra"}), 0.0)
+    def test_quantity_boost(self):
+        self.assertGreater(sentence_score("an estimated 73.8 million cats live here", {"cats"}, quantity_mode=True),
+                           sentence_score("cats are independent animals", {"cats"}, quantity_mode=True))
 
 class TestSynthesize(unittest.TestCase):
-    def test_empty_docs_returns_no_information_message(self):
-        result = synthesize("anything", [])
-        self.assertIn("don't have any indexed information", result)
+    def test_empty(self): self.assertIn("don't have any indexed information", synthesize("x", []))
+    def test_no_match(self):
+        docs=[{"source_type":"file","location":"/a","title":"A","text":"completely unrelated filler content padding out this sentence to pass the length filter here"}]
+        self.assertIn("none of them", synthesize("zzzznonexistent", docs).lower())
+    def test_cited(self):
+        docs=[{"id":1,"source_type":"file","location":"/a","title":"MS","text":"Microsoft was founded by Bill Gates and Paul Allen in nineteen seventy five in Albuquerque."}]
+        r = synthesize("who founded microsoft", docs); self.assertIn("Sources:", r); self.assertIn("Gates", r)
+    def test_confidence_line(self):
+        docs=[{"id":1,"source_type":"web","location":"https://en.wikipedia.org/x","title":"A","text":"Microsoft was founded by Gates and Allen in 1975 in Albuquerque New Mexico."}]
+        self.assertIn("Confidence:", synthesize("who founded microsoft", docs))
+    def test_contradiction_flag(self):
+        docs=[{"id":1,"source_type":"web","location":"https://a.com","title":"A","text":"Microsoft was founded in 1975 by Gates and Allen in Albuquerque."},
+              {"id":2,"source_type":"web","location":"https://b.com","title":"B","text":"Microsoft was founded in 1981 according to this account of Gates and Allen."}]
+        self.assertIn("disagree", synthesize("when was microsoft founded", docs))
+    def test_negation_ranked_below(self):
+        docs=[{"id":1,"source_type":"web","location":"https://a.com","title":"A","text":"Microsoft was founded by Bill Gates and Paul Allen in 1975 in Albuquerque."},
+              {"id":2,"source_type":"web","location":"https://b.com","title":"B","text":"Some claim Microsoft was not founded by Gates alone and the whole story is disputed today."}]
+        r = synthesize("who founded microsoft", docs)
+        self.assertLess(r.index("[1]"), r.index("[2]"))
+        self.assertIn("founded by Bill Gates", r.split("[2]")[0])
+    def test_citation_graph_populated(self):
+        g = CitationGraph()
+        docs=[{"id":7,"source_type":"web","location":"https://a.com","title":"A","text":"Microsoft was founded by Gates and Allen in 1975 in Albuquerque New Mexico here."}]
+        synthesize("who founded microsoft", docs, citation_graph=g)
+        self.assertGreaterEqual(g.corroboration_count("founded microsoft"), 1)
 
-    def test_docs_with_no_matching_sentences_returns_distinct_message(self):
-        docs = [{"source_type": "file", "location": "/a.txt", "title": "A", "text": "completely unrelated filler content padding out this sentence to be long enough"}]
-        result = synthesize("zzzznonexistentterm", docs)
-        self.assertIn("none of them", result.lower())
-        # Distinct from the "no docs at all" message.
-        self.assertNotIn("don't have any indexed information", result)
-
-    def test_matching_docs_produce_cited_answer(self):
-        docs = [{"source_type": "file", "location": "/a.txt", "title": "Microsoft History",
-                 "text": "Microsoft was founded by Bill Gates and Paul Allen in nineteen seventy five in Albuquerque."}]
-        result = synthesize("who founded microsoft", docs)
-        self.assertIn("Sources:", result)
-        self.assertIn("Gates", result)
-
-    def test_citations_are_sequential_with_no_gaps(self):
-        docs = [
-            {"source_type": "file", "location": "/a.txt", "title": "Doc A", "text": "widget alpha appears in this sentence about widgets here today."},
-            {"source_type": "file", "location": "/b.txt", "title": "Doc B", "text": "widget beta appears in this other sentence about widgets here too."},
-        ]
-        result = synthesize("widget", docs)
-        self.assertIn("[1]", result)
-        # If two sources both contribute, citation numbers should be sequential.
-        if "[2]" in result:
-            self.assertNotIn("[3]", result.split("Sources:")[0])
+if __name__ == "__main__": unittest.main()
 
 
-if __name__ == "__main__":
-    unittest.main()

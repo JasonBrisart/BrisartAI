@@ -26,6 +26,22 @@ Edge cases
 - <sup class="reference">[3]</sup> is skipped, scoped narrowly to <sup>.
 - csv_to_text() falls back to naive comma-to-pipe split on malformed CSV.
 - html_to_text() wraps feed()/close() in try/except.
+
+Known limitations
+-----------------
+- HTMLTextExtractor is a tolerant tag stripper, not a DOM/CSS engine; it
+  drops scripts/styles and collapses whitespace but does not execute or
+  layout anything.
+- csv_to_text() assumes comma delimiting and flattens rows to lines; it
+  does not sniff alternate delimiters or quoting dialects.
+- No character-set auto-detection beyond what the caller provides.
+
+Examples
+--------
+    >>> html_to_text("<p>Hello <b>world</b></p><script>x()</script>")
+    'Hello world'
+    >>> csv_to_text("a,b\n1,2")
+    'a b\n1 2'
 """
 from __future__ import annotations
 
@@ -180,3 +196,5 @@ def csv_to_text(source: str) -> str:
         if line:
             output.append(line.replace(",", " | "))
     return "\n".join(output)
+
+

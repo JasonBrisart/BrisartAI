@@ -19,6 +19,19 @@ Settings / parameters
 Edge cases
 ----------
 - ask_text()/ask_note() return "" (not None) on cancel.
+
+Known limitations
+-----------------
+- Thin Tkinter modal wrappers (import path, note, settings); they collect
+  input and return it, performing no validation beyond emptiness.
+- Requires a display; dialog flows are not covered by headless tests.
+- SettingsDialog reflects ResearchSettings toggles only; it cannot edit
+  settings the model does not expose.
+
+Examples
+--------
+    >>> path = ask_import_path(parent)            # doctest: +SKIP
+    >>> note = ask_note(parent)                   # doctest: +SKIP
 """
 from __future__ import annotations
 
@@ -103,3 +116,5 @@ class SettingsDialog(tk.Toplevel):
 
 
 __all__ = ["ask_import_path", "ask_text", "ask_note", "SettingsDialog"]
+
+

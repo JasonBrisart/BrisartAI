@@ -1,12 +1,52 @@
-"""Tests for brisart_ai/knowledge/vault.py -- notes, collections, entities, timeline."""
+"""
+File: brisart_ai/knowledge/tests/test_vault.py
+
+Purpose
+-------
+Unit tests for brisart_ai.knowledge.vault. Verifies the module's public
+behavior and its documented edge cases so regressions are caught
+before release. Contains 13 test cases across TestVault.
+
+Communication / relationships
+------------------------------
+- exercises brisart_ai.knowledge.index (Index)
+- exercises brisart_ai.knowledge.vault (add_note, add_sources_to_collection, create_collection, extract_entities_from_text, list_collections, list_notes)
+- exercises brisart_ai.knowledge.vault (init_vault_schema)
+
+Settings / parameters
+---------------------
+- Standard unittest.TestCase suite; run with pytest
+  (--import-mode=importlib) or `python -m pytest`.
+- Uses only in-memory / temp-dir fixtures where any state is
+  needed; no network, no external services, no shared global state.
+- No tunable parameters of its own; assertions pin the behavior
+  and point values defined in the module under test.
+
+Edge cases
+----------
+- asserts: list collections empty.
+- asserts: add note empty body rejected.
+
+Known limitations
+-----------------
+- Covers the behaviors enumerated above; paths not listed here are
+  not asserted by this file and may be covered elsewhere.
+- Deterministic and offline by design; it does not exercise real
+  network, GUI display, or concurrency behavior.
+
+Examples
+--------
+    $ python -m pytest brisart_ai/knowledge/tests/test_vault.py -v
+    $ python -m pytest brisart_ai/knowledge/tests/test_vault.py --import-mode=importlib
+"""
 import tempfile
 import unittest
 from pathlib import Path
 from brisart_ai.knowledge.index import Index
 from brisart_ai.knowledge.vault import (
     add_note, add_sources_to_collection, create_collection, extract_entities_from_text,
-    list_collections, list_notes, reindex_missing_notes, search_notes, search_notes_as_documents,
-    vault_report,
+    list_collections, list_notes, rebuild_entities, reindex_missing_notes, search_notes,
+    search_notes_as_documents, vault_report,
 )
 
 
@@ -112,6 +152,20 @@ class TestVault(unittest.TestCase):
             self.assertIn("1", report)
             idx.close()
 
+    def test_rebuild_entities_collapses_aliases_via_entity_registry(self):
+        # "Bill Gates" and "William Gates" both resolve to the same
+        # canonical entity via knowledge.entity_registry.resolve_entity_name(),
+        # so rebuild_entities() must store one row for them, not two.
+        with tempfile.TemporaryDirectory() as d:
+            idx = self._make(d)
+            idx.add_source(source_type="file", location="/a.txt", title="A",
+                text="Bill Gates and William Gates are the same person in different sentences here.")
+            rebuild_entities(idx)
+            names = {row[0] for row in idx.conn.execute("SELECT name FROM entities").fetchall()}
+            self.assertIn("Bill Gates", names)
+            self.assertNotIn("William Gates", names)
+            idx.close()
+
     def test_add_sources_to_collection_matches_by_term(self):
         with tempfile.TemporaryDirectory() as d:
             idx = self._make(d)
@@ -123,3 +177,5 @@ class TestVault(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+

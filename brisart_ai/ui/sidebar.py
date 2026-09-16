@@ -20,6 +20,17 @@ Edge cases
 ----------
 - set_status() only displays numbers it is handed.
 - Each button's key is bound as a default argument in its command lambda.
+
+Known limitations
+-----------------
+- A Tkinter navigation/action widget only; it emits callbacks and holds
+  no state beyond what it is given.
+- Requires a display; not covered by the headless suite.
+- Layout is fixed; there is no user-configurable panel arrangement.
+
+Examples
+--------
+    >>> bar = Sidebar(parent, on_import=cb)       # doctest: +SKIP
 """
 from __future__ import annotations
 
@@ -76,3 +87,5 @@ class Sidebar(ttk.Frame):
 
 
 __all__ = ["Sidebar"]
+
+

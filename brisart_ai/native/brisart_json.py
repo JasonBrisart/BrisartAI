@@ -43,6 +43,22 @@ Edge cases
   real-world API response could in principle include one) but is
   never emitted by brisart_dumps() for an ordinary float, since valid
   JSON text has no literal representation for them.
+
+Known limitations
+-----------------
+- A strict subset JSON parser/serializer: it rejects trailing commas,
+  comments, and NaN/Infinity, raising BrisartJSONDecodeError.
+- Numbers decode to int/float only; there is no Decimal or big-number
+  preservation mode.
+- Pure-Python recursive parser; extremely deep nesting can hit the
+  recursion limit rather than a graceful error.
+
+Examples
+--------
+    >>> brisart_loads('{"a": [1, 2, 3]}')
+    {'a': [1, 2, 3]}
+    >>> brisart_dumps({"a": 1})
+    '{"a": 1}'
 """
 from __future__ import annotations
 
@@ -353,3 +369,5 @@ if __name__ == "__main__":
 
 
 __all__ = ["BrisartJSONDecodeError", "brisart_dumps", "brisart_loads"]
+
+

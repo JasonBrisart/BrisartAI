@@ -35,6 +35,21 @@ Edge cases
 - _decode_bing_target() unwraps Bing's /ck/a redirect via brisart_codec.
 - _partition_related_results() judges each result individually.
 - Every provider function is implemented directly in this file.
+
+Known limitations
+-----------------
+- Scrapes public HTML endpoints of several search providers; provider
+  markup changes can break a parser until updated (multiple providers
+  mitigate but do not eliminate this).
+- Honors block markers and falls back across providers, but a query all
+  providers block returns nothing rather than an error.
+- No API keys are used; result quality/quantity is whatever the public
+  HTML surfaces expose.
+
+Examples
+--------
+    >>> results, outcome = search_public_web("who founded microsoft")   # doctest: +SKIP
+    >>> results[0].url                                                   # doctest: +SKIP
 """
 from __future__ import annotations
 
@@ -743,3 +758,5 @@ def search_public_web(
 
 
 __all__ = ["search_public_web"]
+
+

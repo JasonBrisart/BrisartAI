@@ -19,6 +19,18 @@ Edge cases
 ----------
 - The transcript is read-only outside of append().
 - append() auto-scrolls to the bottom after every message.
+
+Known limitations
+-----------------
+- A Tkinter view widget only; it renders text the service produces and
+  holds no business logic or ranking behavior.
+- Rendering is plain text with light tagging, not rich HTML/markdown.
+- Requires a display; not exercised by the headless test suite.
+
+Examples
+--------
+    >>> panel = ChatPanel(parent)                 # doctest: +SKIP
+    >>> panel.append_message("assistant", "Hello") # doctest: +SKIP
 """
 from __future__ import annotations
 
@@ -96,3 +108,5 @@ class ChatPanel(ttk.Frame):
 
 
 __all__ = ["ChatPanel"]
+
+

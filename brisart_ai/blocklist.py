@@ -37,6 +37,25 @@ Edge cases
 - is_blocked_web_host() requires an absolute URL with a scheme.
 - is_offtopic_wiki() only rejects a wiki page whose title is EXACTLY a
   bare function word, unless overridden by topic_terms.
+
+Known limitations
+-----------------
+- The blocked/low-value host lists and listing-path markers are finite,
+  hand-maintained constants; a junk host not yet listed passes through.
+- Matching is host- and path-substring based, not content based; a
+  useful page on a blocked host is still blocked, and a junk page on an
+  allowed host is not caught here.
+- is_offtopic_wiki() only recognizes single-word function-word titles;
+  a multi-word off-topic title is not flagged.
+
+Examples
+--------
+    >>> is_blocked_web_host("https://www.merriam-webster.com/dictionary/cat")
+    True
+    >>> is_junk_web_source("https://en.wikipedia.org/wiki/the")
+    True
+    >>> is_junk_web_source("https://example.com/article")
+    False
 """
 from __future__ import annotations
 
@@ -151,3 +170,5 @@ __all__ = [
     "is_offtopic_wiki",
     "is_junk_web_source",
 ]
+
+

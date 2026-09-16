@@ -23,6 +23,23 @@ Edge cases
 - iter_supported_files() silently skips inaccessible paths.
 - .rtf gets a crude regex stripper.
 - .json/.jsonl never raise on invalid JSON.
+
+Known limitations
+-----------------
+- The supported-extension sets are fixed constants; a file type not in
+  TEXT/BINARY_TEXT_EXTENSIONS is reported unsupported even if readable.
+- iter_supported_files() walks the filesystem eagerly; very large trees
+  are traversed in full with no depth or count cap here.
+- read_file() delegates encoding handling to util.safe_read_text /
+  binary readers and never raises on a bad file, returning "".
+
+Examples
+--------
+    >>> is_supported("notes.md")
+    True
+    >>> is_supported("photo.jpg")
+    False
+    >>> for p in iter_supported_files("./docs"): read_file(p)  # doctest: +SKIP
 """
 from __future__ import annotations
 
@@ -142,3 +159,5 @@ def read_file(path: Path) -> str:
     if ext == ".rtf":
         return _rtf_to_text(raw)
     return raw
+
+

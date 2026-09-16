@@ -3,90 +3,125 @@ File: brisart_ai/core/conversation.py
 
 Purpose
 -------
-The single answer-routing entry point.
+Answer routing: the single "answer this question" entry point the UI
+service calls. It cleans the input, decides which source types to search,
+runs local ranked search (optionally falling back to one web search),
+hands surviving evidence to synthesis, and records the exchange to
+session memory. Compound questions are split into independent
+sub-questions, each ranked + synthesized separately, with a single
+CitationGraph shared across the sub-answers.
 
 Communication / relationships
 ------------------------------
-- brisart_ai/ui/service.py: BrisartService.ask() is the only caller.
-- Calls brisart_ai.io.input_cleaner.normalize_shellish_input(),
-  brisart_ai.knowledge.ranker.search(),
-  brisart_ai.knowledge.synthesizer.synthesize(), and
-  brisart_ai.web.crawler.web_search_and_ingest().
+- brisart_ai/ui/service.py: BrisartService is the caller of
+  build_conversation_answer(), and hands in the session's
+  RelevanceFeedback store on every call.
+- Calls io.input_cleaner.normalize_shellish_input(),
+  knowledge.query_decomposition.decompose_query(),
+  knowledge.ranker.search(), and knowledge.synthesizer.synthesize().
+- Constructs one knowledge.citation_graph.CitationGraph per question and
+  shares it across every sub-question's synthesize() call.
+- Reads core.settings.ResearchSettings for the allowed source-type set
+  and core.session_memory for recent topics.
 
 Settings / parameters
-----------------------
-- allowed_source_types: always "web"; "file"/"note" per-toggle.
-- force_web: explicit "Research Web" vs. fallback-only.
+---------------------
+- limit (default 8): max ranked documents pulled per sub-question.
+- web_limit (default 5): max pages a fallback web search may ingest.
+- force_web (default False): when True and local search is empty, one
+  web_ingest() pass runs before re-searching. web is always an allowed
+  source type; file is added when search_local_files is on, note when
+  search_notes is on.
+- feedback: the session RelevanceFeedback store, forwarded into every
+  search so ranking always reflects the user's marks.
+- At most ONE web search per sub-question, never stacked.
 
 Edge cases
 ----------
-- A web search is triggered exactly once per question.
-- Both question and answer are always recorded to session memory.
+- An empty/whitespace-only sub-question from decomposition is skipped.
+- When nothing is found across every sub-question, a single "no indexed
+  information" message is returned, and both the question and that
+  message are still recorded to session memory.
+- A single-element decomposition is answered as a plain question, with no
+  "[sub-question]" prefixing.
+- feedback=None is accepted (a store with no marks would be a no-op
+  anyway), so the router still works if the caller has not built one.
+
+Known limitations
+-----------------
+- Decomposition splits at most once, so a three-clause question yields at
+  most two parts.
+- The shared CitationGraph is per-call and in-memory; corroboration is
+  not persisted across turns.
+- Fallback web ingestion runs synchronously in the answer path; a slow
+  provider directly delays that sub-question's answer.
+- Sub-answers are concatenated, not merged; a source surfaced by two
+  sub-questions is cited under each.
+
+Examples
+--------
+    >>> answer = build_conversation_answer(
+    ...     "who founded microsoft?", index, memory, settings=settings,
+    ...     feedback=feedback)
+    >>> "Sources:" in answer
+    True
+    >>> answer = build_conversation_answer(
+    ...     "who founded microsoft and when was it founded?",
+    ...     index, memory, settings=settings, feedback=feedback)
+    >>> answer.count("[who founded") >= 1
+    True
 """
 from __future__ import annotations
-
 from typing import Optional
-
 from brisart_ai.core.settings import ResearchSettings
 from brisart_ai.io.input_cleaner import normalize_shellish_input
+from brisart_ai.knowledge.citation_graph import CitationGraph
+from brisart_ai.knowledge.query_decomposition import decompose_query
 from brisart_ai.knowledge.ranker import search
 from brisart_ai.knowledge.synthesizer import synthesize
-from brisart_ai.web.crawler import web_search_and_ingest
 
 
-def build_conversation_answer(
-    query: str, index, memory, limit: int = 8,
-    settings: Optional[ResearchSettings] = None, web_limit: int = 5,
-    force_web: bool = False,
-) -> str:
-    """Build a source-grounded answer to one question."""
+def build_conversation_answer(query, index, memory, limit=8,
+                              settings: Optional[ResearchSettings] = None,
+                              web_limit=5, force_web=False, web_ingest=None,
+                              feedback=None) -> str:
     cleaned = normalize_shellish_input(query)
     recent = memory.recent_topics(limit=4)
-
-    allowed_source_types = {"web"}
+    allowed = {"web"}
     if settings is None or settings.get("search_local_files"):
-        allowed_source_types.add("file")
+        allowed.add("file")
     if settings is not None and settings.get("search_notes"):
-        allowed_source_types.add("note")
+        allowed.add("note")
 
-    def _gather_docs():
-        return search(index, cleaned, limit=limit, source_types=allowed_source_types)
+    subquestions = decompose_query(cleaned)
+    graph = CitationGraph()
+    answers = []
+    any_found = False
+    for sub in subquestions:
+        if not sub.strip():
+            continue
+        docs = search(index, sub, limit=limit, source_types=allowed, feedback=feedback)
+        if not docs and force_web and web_ingest is not None:
+            web_ingest(sub, index, limit=web_limit, crawl_depth=0)
+            docs = search(index, sub, limit=limit, source_types=allowed, feedback=feedback)
+        if docs:
+            any_found = True
+            piece = synthesize(sub, docs, recent_topics=recent, citation_graph=graph)
+            if len(subquestions) > 1:
+                answers.append(f"[{sub}]\n{piece}")
+            else:
+                answers.append(piece)
 
-    docs = _gather_docs()
-
-    auto_enabled = bool(settings is not None and settings.get("auto_web_research"))
-    should_search_web = force_web or (not docs and auto_enabled)
-
-    used_web = False
-    if should_search_web:
-        used_web = True
-        web_search_and_ingest(cleaned, index, limit=web_limit, crawl_depth=0)
-        docs = _gather_docs()
-
-    if docs:
-        answer = synthesize(cleaned, docs, recent_topics=recent)
-        if used_web:
-            answer = (
-                "Searched the public web for this question, then answered "
-                "from the pages that were retrieved.\n\n"
-            ) + answer
+    if any_found:
+        answer = "\n\n".join(answers)
     else:
-        answer = (
-            "I don't have any indexed information that answers that yet. "
-            "Try importing relevant files, or ask me to research the web "
-            "for this."
-        )
-        if used_web:
-            answer = (
-                "I searched the public web for this, but did not find "
-                "pages with usable, on-topic evidence. Try rephrasing the "
-                "question with more specific terms."
-            )
-
+        answer = ("I don't have any indexed information that answers that yet. "
+                  "Try importing relevant files, or ask me to research the web for this.")
     memory.add("user", cleaned)
     memory.add("assistant", answer)
-
     return answer
 
 
 __all__ = ["build_conversation_answer"]
+
+

@@ -43,6 +43,25 @@ Edge cases
 - brisart_urljoin() implements RFC 3986 section 5.3's reference
   resolution algorithm, including the dot-segment removal step
   (collapsing "/a/b/../c" to "/a/c" and "/a/./b" to "/a/b").
+
+Known limitations
+-----------------
+- A pragmatic URL splitter/joiner covering the schemes the crawler
+  needs; it is not a full RFC 3986 validator and accepts some inputs a
+  strict parser would reject.
+- brisart_quote/unquote handle percent-encoding for the common unreserved
+  set; exotic IRI/punycode host encoding is out of scope.
+- Relative-reference resolution in brisart_urljoin covers common cases,
+  not every abnormal example in the RFC.
+
+Examples
+--------
+    >>> brisart_urlsplit("https://a.com/p?q=1").hostname
+    'a.com'
+    >>> brisart_urljoin("https://a.com/x/y", "../z")
+    'https://a.com/z'
+    >>> brisart_quote("a b")
+    'a%20b'
 """
 from __future__ import annotations
 
@@ -352,3 +371,5 @@ __all__ = [
     "brisart_urlsplit",
     "brisart_urlunsplit",
 ]
+
+
