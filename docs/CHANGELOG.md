@@ -4,6 +4,62 @@ All notable changes to BrisartAI are documented in this file, oldest release at 
 
 ---
 
+## [1.2.6] - 2026-09-16
+
+Removes the automatic web-source purge introduced alongside the 1.2.4/1.2.5
+crawler work. That behavior silently deleted previously indexed web sources
+with no explicit user action, which is inconsistent with BrisartAI's
+local-first design -- the user, not the app, controls what stays in their
+own index. No ranking, search, or crawling behavior changes in this release;
+every change below is a removal.
+
+### Removed
+**Automatic startup purge of web sources.** `BrisartService.__init__()`
+previously called `Index.purge_blocked_web_sources()` on every app startup
+and printed a "Startup cleanup: removed N stale dictionary/definition
+page(s)..." message, deleting rows from `brisart_ai_index.sqlite3` without
+any explicit action or confirmation from the user. That call, the
+underlying `Index.purge_junk_web_sources()` / `purge_blocked_web_sources()`
+method it depended on, and its two dedicated tests
+(`test_purge_junk_web_sources_removes_blocked_hosts`,
+`test_purge_only_affects_web_sources`) have all been removed from
+`brisart_ai/ui/service.py`, `brisart_ai/knowledge/index.py`, and
+`brisart_ai/knowledge/tests/test_index.py`. `blocklist.py`'s docstring is
+updated to no longer describe `index.py` as a consumer of
+`is_junk_web_source()`. There is no longer any code path anywhere in
+`brisart_ai` that automatically deletes a previously indexed source.
+
+### Kept (for clarity, not changed)
+- `Index.clear()` -- an explicit, caller-invoked full-index reset -- is
+  unaffected and still tested.
+- `reindex_missing_notes()` -- an additive, non-destructive startup
+  backfill -- still runs once at startup.
+- Pre-ingestion filtering (`is_junk_web_source()` in `web/search.py` and
+  `web/crawler.py`, plus the crawler's `_page_is_on_topic()` content-
+  relevance gate) is unchanged; these prevent junk from ever being
+  indexed in the first place and were never part of the removed
+  auto-purge behavior.
+
+### Verification
+- Full compile check: `blocklist.py`, `knowledge/index.py`,
+  `knowledge/tests/test_index.py`, and `ui/service.py` all compile cleanly
+  after the removal.
+- `knowledge/tests/test_index.py`'s remaining 8 tests (add/count/upsert/
+  clear/context-manager) pass unchanged; the 2 purge-specific tests are
+  gone, not skipped.
+- Traced every call site of `purge_junk_web_sources` /
+  `purge_blocked_web_sources` across the project: none remain.
+
+### Known Limitations
+- Any junk web pages that were already deleted by the old startup purge,
+  or already sitting in a user's existing `brisart_ai_index.sqlite3` from
+  before this release, are unaffected either way -- this release only
+  stops future automatic deletions; it does not restore or re-purge
+  anything. A user who wants a clean index can still call `Index.clear()`
+  explicitly.
+
+---
+
 ## [1.2.5] - 2026-09-16
 
 Makes web research actually reachable from the chat box, restores the

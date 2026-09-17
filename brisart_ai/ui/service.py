@@ -10,6 +10,7 @@ of every ranked search for the app's lifetime.
 
 Communication / relationships
 ------------------------------
+
 - brisart_ai/ui/app.py: constructs the single BrisartService instance.
 - Owns brisart_ai.knowledge.index.Index, brisart_ai.core.session_memory.
   SessionMemory, brisart_ai.core.settings.ResearchSettings, and one
@@ -19,11 +20,11 @@ Communication / relationships
   brisart_ai.web.crawler.web_search_and_ingest(). The last of these is
   passed INTO build_conversation_answer() as its web_ingest callback, so
   the conversation router can actually perform a fallback/forced web
-  search (see Fix 1) -- without this wiring, force_web / auto_web_research
-  are inert.
+  search -- without this wiring, force_web / auto_web_research are inert.
 
 Settings / parameters
 ---------------------
+
 - __init__(db_path): construction deliberately unguarded.
 - ask(text, force_web=None): forwards the session feedback store into the
   conversation router on every call, passes web_search_and_ingest as the
@@ -33,9 +34,9 @@ Settings / parameters
   citation_sink parameter. force_web is a three-state flag: None means an
   ordinary typed question (defer to the Automatic Web Research setting);
   True means the explicit "Research Web" action (always fetch, even when
-  the local index already matched). These are now forwarded to
-  build_conversation_answer() as two SEPARATE flags -- force_web (explicit)
-  and auto_web (setting) -- rather than one collapsed bool (see Fix 2).
+  the local index already matched). These are forwarded to
+  build_conversation_answer() as two SEPARATE flags -- force_web
+  (explicit) and auto_web (setting) -- rather than one collapsed bool.
 - mark_relevant / mark_irrelevant: record a user's judgement on a source
   into the session store, so subsequent searches reflect it.
 - mark_citation(index, relevant): the UI-facing entry point -- looks up
@@ -46,48 +47,24 @@ Settings / parameters
 
 Edge cases
 ----------
+
 - self._stdout_lock guards stdout redirection in ask().
 - The feedback store starts empty, so it has no effect on ranking until a
   result is actually marked; marks last for the session, not across
   restarts.
 - The explicit "Research Web" action fetches fresh web results even when
   the local index already contains a match; Automatic Web Research only
-  fetches when local search comes up empty (see Fix 2).
+  fetches when local search comes up empty.
 
 Known limitations
 -----------------
+
 - The headless-testable seam between UI and engine; it orchestrates but
   owns no ranking logic itself.
 - Diagnostic-marker handling recognizes only the fixed _DIAGNOSTIC_MARKERS
   set and caps output at _MAX_DIAGNOSTIC_LINES.
 - Web research is gated by settings and runs synchronously; a slow
   provider blocks the calling turn.
-
-Fix 1 (2026-09-16): Web research never actually ran from the chat box.
-build_conversation_answer()'s only web-search branch is guarded by a
-`web_ingest is not None` check, and its web_ingest parameter defaults to
-None. ask() forwarded force_web, feedback, and citation_sink but never
-passed web_ingest, so the guard was always False -- the crawler
-(web_search_and_ingest, already imported in this module) was never called.
-The GUI still printed "Searching the public web..." because app.py prints
-that line from the setting alone, independent of whether a fetch occurs,
-which masked the dead wire. Fixed by passing
-`web_ingest=web_search_and_ingest` into build_conversation_answer() here.
-
-Fix 2 (2026-09-16): The explicit "Research Web" action and the Automatic
-Web Research setting were collapsed into a single `force_web` bool
-(`resolved_force_web`), and build_conversation_answer() only ran a web
-search when the local index was empty (`if not docs and force_web`).
-Consequently the explicit "Research Web" button did nothing whenever any
-local page already matched the query (contradicting docs/README.md, which
-says the forced action always searches the web), and a single stale or
-marginal page already in the local index silently suppressed the web
-search for typed questions, so answers were synthesized from that stale
-page (the reported "old cat-history" answers to statistic questions).
-Fixed here by forwarding two SEPARATE flags to build_conversation_answer():
-`force_web` (True only for the explicit action -> always fetch) and
-`auto_web` (the setting -> fetch only when local search is empty). The
-matching gate change lives in core/conversation.py's own Fix 1.
 
 Examples
 --------
@@ -96,7 +73,6 @@ Examples
 """
 
 from __future__ import annotations
-
 import contextlib
 import io
 import threading
@@ -122,9 +98,6 @@ class BrisartService:
     def __init__(self, db_path: str = DEFAULT_DB):
         self.db_path = db_path
         self.index = Index(db_path)
-        removed = self.index.purge_blocked_web_sources()
-        if removed:
-            print(f"Startup cleanup: removed {removed} stale dictionary/definition page(s) from the index.")
         reindexed = reindex_missing_notes(self.index)
         if reindexed:
             print(f"Startup cleanup: indexed {reindexed} previously unindexed note(s) for ranked search.")
@@ -150,8 +123,7 @@ class BrisartService:
         "Research Web" action, which always fetches fresh web results even
         when the local index already matched. These are forwarded to
         build_conversation_answer() as two separate flags -- force_web
-        (explicit) and auto_web (setting) -- so a stale local match can no
-        longer silently suppress the explicit action (see Fix 2).
+        (explicit) and auto_web (setting).
 
         Also refreshes self.last_citations with the structured
         (source_id, title, location) data behind THIS answer's [N] markers,
