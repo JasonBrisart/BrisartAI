@@ -1,43 +1,62 @@
-# brisart_ai/web/
+# brisart_ai/
 
-Public web search, crawling, fetching, and the safety policy that governs what BrisartAI is allowed to fetch. Optional — disabled entirely when Automatic Web Research is off and "Research Web" is never used, the intended posture for air-gapped environments.
+The BrisartAI Python package — everything the application is made of. This top-level folder holds the seven feature packages plus the small shared modules they all depend on.
 
+> **Note:** in the current repository, this file was accidentally a byte-for-byte copy of `brisart_ai/web/README.md`. This is the corrected, package-level version.
+
+```text
+brisart_ai/
+├── core/            Answer routing, session memory, persistent settings
+├── io/              Reading local files into searchable text
+├── knowledge/       SQLite index, ranking, relevance, synthesis, vault
+├── native/          The Brisart Native Stack (pure-Python stdlib replacements)
+├── ui/              The Tkinter desktop app and its service boundary
+├── web/             Optional public web search, fetch, and crawl policy
+├── tests/           Tests for the four shared modules below
+├── blocklist.py     Shared junk-host / function-word policy
+├── intent.py        Query- and answer-intent classification
+├── util.py          Shared tokenize / hash / URL / sentence toolbox
+└── version_info.py  Loads the canonical version string from version.py
 ```
-web/
-├── search.py     Dependency-free search across 7 providers
-├── crawler.py    The single chokepoint every web page passes through to get indexed
-├── fetcher.py    Single-URL retrieval
-├── policy.py     Robots.txt + local/private-host safety policy
-├── models.py     FetchResult data model
-└── stats.py      CrawlStats counters for one crawl run
-```
 
-## `search.py`
+Each feature package carries its own `README.md`. Start with [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) for the full request flow and dependency rules; this file covers only the four shared modules that live directly here.
 
-Seven providers, tried in order from most likely to be blocked to least likely: Startpage → Brave Search → DuckDuckGo HTML → DuckDuckGo Lite → Bing HTML → Mojeek → Wikipedia API. Every provider before the Wikipedia API is an HTML scraper, fragile in a different way (bot detection, challenge pages, rate-limiting, undocumented markup) — the chain deliberately spends its riskiest request first, so each subsequent provider is both a fallback for the ones before it and a strictly safer bet in its own right. The Wikipedia API runs last as a stable, key-free floor on quality.
+---
 
-Two extraction strategies: DuckDuckGo/Bing use known result-link CSS classes or `<h2>`/`<h3>` heading structure; Mojeek/Brave/Startpage (whose markup is undocumented or shifts often) use domain-based heuristics instead — a result's host must simply differ from the search engine's own host and not be a help/account/static subdomain of it.
+## The dependency floor
 
-`_partition_related_results()` judges each `(url, title)` pair individually against the query's meaningful terms, rather than a whole-batch check that could let a single good result wave through an entire batch of garbage.
+These four modules sit at the bottom of BrisartAI's *own* import graph. They may be imported from anywhere above; they import nothing from `core/`, `knowledge/`, `io/`, `ui/`, or `web/`. Their only downward dependency is `native/`, which knows nothing about BrisartAI at all.
 
-HTML parsing, JSON decoding, Base64 unwrapping, and URL handling throughout this module use the Brisart Native Stack (`brisart_ai.native.*`) rather than `html.parser`/`json`/`base64`/`urllib.parse` directly.
+This is deliberate. It is exactly why `blocklist.py` lives here rather than inside `web/`: `knowledge/index.py` needs to purge junk web rows, and it must be able to do that without the knowledge layer taking a dependency on the web layer.
 
-## `crawler.py`
+---
 
-The single chokepoint every web page must pass through to get indexed: normalize the query, rank the resulting URLs, filter out known-junk hosts and off-topic disambiguation pages, respect robots.txt, fetch and de-duplicate content, and add the survivors to the index.
+## `util.py`
 
-A question keeps its natural phrasing when sent to search (`clean_search_query()`) — that phrasing is what matches pages actually containing the answer. A keyword-only form (`search_keyword_fallback()`) is searched too, and results from both are merged.
+The one shared, dependency-free toolbox every other layer imports from:
 
-`score_result()`/`_score_detail()` is a small, hand-tuned integer heuristic, not a learned model: `+3` per topic term in the path (strongest signal), `+2` per topic term in the hostname or title, `+2` for an article-shaped slug, `+4` for a literal phrase match, `-4` for a low-value host or an account/login portal, `-3` for a listing/search page, `-2` for zero topic terms matched, plus a folded-in intent adjustment.
+- **`tokenize()`** — lowercases, splits on word boundaries, drops single-character words and a small English stopword set. Returns `[]` for `None` or `""` rather than raising.
+- **`stable_hash()` / `file_hash()`** — SHA-256 fingerprints (via the native `brisart_hash`) for stable source keys and file de-duplication. `file_hash()` streams a file in 1 MB chunks rather than reading it whole.
+- **`normalize_url()` / `same_site()`** — URL normalization and host comparison (via the native `brisart_url`). A schemeless string is upgraded to `https://` here — that policy decision lives in `util.py`, not in the native URL parser.
+- **`split_sentences()`** — sentence splitting for synthesis; sentences outside a 30–700 character band are dropped.
+- **`safe_read_text()`** — best-effort multi-encoding read (utf-8 → utf-16 → latin-1, always succeeding via a final `errors="replace"`).
 
-## `policy.py`
+---
 
-`RobotsCache` fetches and caches `robots.txt` per site (never re-fetched twice in one run) using the Brisart Native Stack's `brisart_robots` (replacing `urllib.robotparser.RobotFileParser`). If `robots.txt` is missing, unreachable, too large, malformed, or returns 401/403, crawling is **allowed**, not blocked — a retrieval failure must never be read as an explicit site-wide denial.
+## `intent.py`
 
-`is_local_or_private_host()` recognizes localhost and its variants, `.local`/`.localhost`-suffixed hosts, and any IP address `ipaddress` classifies as private/loopback/link-local/multicast/reserved/unspecified — checked before any network access at all. `USER_AGENT` is version-stamped via `version_info.__version__`.
+Question-intent detection and intent-aware scoring. Term-overlap ranking cannot tell "does this mention the query words" from "does this mention them *for the right reason*," so a query is classified into a coarse intent — **founder, inventor, statistic, explanation, comparison, or general** — and each intent carries BOOST and PENALTY vocabularies.
 
-## `fetcher.py`, `models.py`, `stats.py`
+Intent is a **hint, not a filter**: it only nudges scores, never excludes a document. Shared by `knowledge/ranker.py`, `knowledge/synthesizer.py`, and `web/crawler.py`, so web and offline ranking can never diverge on classification. Two vocabularies here — `_KNOWN_COMPANIES` and `_GENERIC_CONCEPT_TITLES` — are intentionally finite and hand-maintained (see KI-004, KI-008 in `docs/KNOWN_ISSUES.md`).
 
-- **`fetcher.py`** — `fetch_url()` fetches one normalized URL, caps response size at `MAX_PAGE_BYTES` (2,000,000), decodes using the declared/detected charset, and hands HTML off to `io/extractor.py`'s `html_to_text()`. Every failure mode is captured into the returned `FetchResult` rather than raised.
-- **`models.py`** — `FetchResult`, the single return value of one URL fetch attempt.
-- **`stats.py`** — `CrawlStats`, five counters (requested, indexed, duplicates, empty, errors) plus `print_summary()` for an end-of-run diagnostic report.
+---
+
+## `blocklist.py`
+
+The single source of truth for "should this web page be kept?" Holds the blocked dictionary/definition hosts, low-value hosts, listing-path markers, account-host prefixes, and the canonical bare-function-word set. Consumed by `web/search.py`, `web/crawler.py`, and `knowledge/index.py` (to purge junk rows already stored). Requires an absolute URL with a scheme; an off-topic-wiki check only rejects a page whose title is *exactly* a bare function word unless overridden by the query's own topic terms.
+
+---
+
+## `version_info.py`
+
+Single source of truth for `APP_NAME` (`"BrisartAI"`) and `__version__`. Loads `version.py` from the project root by file path via `importlib.util` (not `import version`, since `version.py` lives outside the package and must not require the project root on `sys.path`). Falls back to `"0.0.0-unknown"` if `version.py` is missing, unreadable, or fails to import — a broken version file can never crash startup.
