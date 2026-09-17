@@ -1,41 +1,4 @@
-"""
-File: brisart_ai/web/tests/test_models.py
-
-Purpose
--------
-Unit tests for brisart_ai.web.models. Verifies the module's public
-behavior and its documented edge cases so regressions are caught
-before release. Contains 3 test cases across TestFetchResult.
-
-Communication / relationships
-------------------------------
-- exercises brisart_ai.web.models (FetchResult)
-
-Settings / parameters
----------------------
-- Standard unittest.TestCase suite; run with pytest
-  (--import-mode=importlib) or `python -m pytest`.
-- Uses only in-memory / temp-dir fixtures where any state is
-  needed; no network, no external services, no shared global state.
-- No tunable parameters of its own; assertions pin the behavior
-  and point values defined in the module under test.
-
-Edge cases
-----------
-- asserts: error field defaults to empty string.
-
-Known limitations
------------------
-- Covers the behaviors enumerated above; paths not listed here are
-  not asserted by this file and may be covered elsewhere.
-- Deterministic and offline by design; it does not exercise real
-  network, GUI display, or concurrency behavior.
-
-Examples
---------
-    $ python -m pytest brisart_ai/web/tests/test_models.py -v
-    $ python -m pytest brisart_ai/web/tests/test_models.py --import-mode=importlib
-"""
+"""Tests for brisart_ai/web/models.py -- FetchResult."""
 import unittest
 from brisart_ai.web.models import FetchResult
 
@@ -59,6 +22,3 @@ class TestFetchResult(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-

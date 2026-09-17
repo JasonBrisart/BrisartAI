@@ -27,25 +27,6 @@ Edge cases
 - Missing/unreachable/malformed robots.txt -> ALLOWED, not blocked.
 - is_local_or_private_host() runs before any network access.
 - BrisartRobotsPolicy mirrors urllib.robotparser's simpler algorithm.
-
-Known limitations
------------------
-- Blocks localhost/private-range hosts to prevent SSRF, but the private-
-  range check is IP/host-pattern based and cannot catch every rebinding
-  or proxy trick.
-- RobotsCache honors robots.txt with a bounded fetch (MAX_ROBOTS_BYTES,
-  ROBOTS_TIMEOUT); an unreachable robots file is treated per the cache's
-  fail policy, not re-tried aggressively.
-- USER_AGENT is fixed; it does not rotate or masquerade.
-
-Examples
---------
-    >>> is_localhost("http://127.0.0.1:8000")
-    True
-    >>> is_local_or_private_host("http://10.0.0.5")
-    True
-    >>> is_local_or_private_host("https://example.com")
-    False
 """
 from __future__ import annotations
 
@@ -174,6 +155,3 @@ class RobotsCache:
 
 
 __all__ = ["MAX_ROBOTS_BYTES", "ROBOTS_TIMEOUT", "RobotsCache", "USER_AGENT", "is_local_or_private_host", "is_localhost"]
-
-
-

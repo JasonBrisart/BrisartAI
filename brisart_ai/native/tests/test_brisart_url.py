@@ -1,41 +1,4 @@
-"""
-File: brisart_ai/native/tests/test_brisart_url.py
-
-Purpose
--------
-Unit tests for brisart_ai.native.brisart_url. Verifies the module's public
-behavior and its documented edge cases so regressions are caught
-before release. Contains 14 test cases across TestBrisartUrlsplit, TestBrisartQuoteUnquote, TestBrisartUrljoin, TestBrisartQueryEncoding.
-
-Communication / relationships
-------------------------------
-- exercises brisart_ai.native.brisart_url (brisart_parse_qsl, brisart_quote, brisart_unquote, brisart_urlencode, brisart_urljoin, brisart_urlsplit)
-
-Settings / parameters
----------------------
-- Standard unittest.TestCase suite; run with pytest
-  (--import-mode=importlib) or `python -m pytest`.
-- Uses only in-memory / temp-dir fixtures where any state is
-  needed; no network, no external services, no shared global state.
-- No tunable parameters of its own; assertions pin the behavior
-  and point values defined in the module under test.
-
-Edge cases
-----------
-- asserts: schemeless url has empty scheme.
-
-Known limitations
------------------
-- Covers the behaviors enumerated above; paths not listed here are
-  not asserted by this file and may be covered elsewhere.
-- Deterministic and offline by design; it does not exercise real
-  network, GUI display, or concurrency behavior.
-
-Examples
---------
-    $ python -m pytest brisart_ai/native/tests/test_brisart_url.py -v
-    $ python -m pytest brisart_ai/native/tests/test_brisart_url.py --import-mode=importlib
-"""
+"""Tests for brisart_ai/native/brisart_url.py -- BrisartURL vs. real urllib.parse."""
 import urllib.parse
 import unittest
 from brisart_ai.native.brisart_url import (
@@ -121,6 +84,3 @@ class TestBrisartQueryEncoding(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-

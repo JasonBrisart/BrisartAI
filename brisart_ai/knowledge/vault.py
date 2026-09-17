@@ -11,10 +11,6 @@ Communication / relationships
 ------------------------------
 - brisart_ai/ui/service.py: calls add_note(), list_notes(), search_notes(),
   reindex_missing_notes() (once, at startup).
-- Imports brisart_ai.knowledge.entity_registry.resolve_entity_name():
-  rebuild_entities() canonicalizes each raw extracted name before storing
-  it, so "Bill Gates" and "William Gates" extracted from the same corpus
-  collapse to one entity row instead of two.
 - Imports brisart_ai.util.{now_ts, tokenize}; calls index.add_source().
 
 Settings / parameters
@@ -26,31 +22,12 @@ Edge cases
 ----------
 - Notes mirrored into sources (source_type="note") via _index_note().
 - reindex_missing_notes() is idempotent.
-
-Known limitations
------------------
-- extract_entities_from_text() is a capitalization/regex heuristic
-  (ENTITY_RE), not NER; it over-captures Title-Case non-entities and
-  misses lowercase or non-Latin names.
-- Notes and collections are plain SQLite rows; there is no rich text,
-  versioning, or conflict resolution.
-- Entity rows are not alias-resolved here unless the caller passes names
-  through knowledge/entity_registry first.
-
-Examples
---------
-    >>> # schema is idempotent and safe to call on every open
-    >>> init_vault_schema(index)                 # doctest: +SKIP
-    >>> add_note(index, "Meeting", "Ship v1 on Friday")   # doctest: +SKIP
-    >>> extract_entities_from_text("Bill Gates founded Microsoft")
-    ['Bill Gates', 'Microsoft']
 """
 from __future__ import annotations
 
 import re
 from typing import Dict, List, Optional, Tuple
 
-from brisart_ai.knowledge.entity_registry import resolve_entity_name
 from brisart_ai.util import now_ts, tokenize
 
 ENTITY_RE = re.compile(r"\b[A-Z][A-Za-z0-9_]*(?:[ -][A-Z][A-Za-z0-9_]*){0,4}\b")
@@ -364,8 +341,7 @@ def rebuild_entities(index, max_sources: int = 5000) -> str:
         index.conn.execute("DELETE FROM source_entities")
         for source_id, title, text in rows:
             blob = f"{title or ''}\n{text or ''}"
-            raw_entities = extract_entities_from_text(blob)
-            entities = dict.fromkeys(resolve_entity_name(name) or name for name in raw_entities)
+            entities = extract_entities_from_text(blob)
             for entity in entities:
                 index.conn.execute(
                     "INSERT OR IGNORE INTO entities(name, entity_type, created_at) VALUES(?,?,?)",
@@ -500,6 +476,3 @@ __all__ = [
     "list_notes", "reindex_missing_notes", "rebuild_entities", "search_notes",
     "search_notes_as_documents", "timeline", "vault_report",
 ]
-
-
-

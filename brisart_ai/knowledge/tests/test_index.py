@@ -1,47 +1,7 @@
-"""
-File: brisart_ai/knowledge/tests/test_index.py
-Purpose
--------
-Unit tests for brisart_ai.knowledge.index. Verifies the module's public
-behavior and its documented edge cases so regressions are caught
-before release. Contains 8 test cases across TestIndex.
-Communication / relationships
-------------------------------
-- exercises brisart_ai.knowledge.index (Index)
-Settings / parameters
----------------------
-- Standard unittest.TestCase suite; run with pytest
-  (--import-mode=importlib) or `python -m pytest`.
-- Uses only in-memory / temp-dir fixtures where any state is
-  needed; no network, no external services, no shared global state.
-- No tunable parameters of its own; assertions pin the behavior
-  and point values defined in the module under test.
-Edge cases
-----------
-- asserts: empty text returns false not added.
-- asserts: missing source type raises.
-- asserts: missing location raises.
-- asserts: readding same source upserts not duplicates.
-Known limitations
------------------
-- Covers the behaviors enumerated above; paths not listed here are
-  not asserted by this file and may be covered elsewhere.
-- Deterministic and offline by design; it does not exercise real
-  network, GUI display, or concurrency behavior.
-Fix 1 (2026-09-16): Removed test_purge_junk_web_sources_removes_blocked_hosts
-and test_purge_only_affects_web_sources. Both tested Index.purge_junk_web_sources(),
-which has been removed along with the automatic/startup web-source purge
-feature it backed; there is no longer any automatic-deletion behavior in
-Index to test.
-Examples
---------
-    $ python -m pytest brisart_ai/knowledge/tests/test_index.py -v
-    $ python -m pytest brisart_ai/knowledge/tests/test_index.py --import-mode=importlib
-"""
+"""Tests for brisart_ai/knowledge/index.py -- Index (SQLite source/term store)."""
 import tempfile
 import unittest
 from pathlib import Path
-
 from brisart_ai.knowledge.index import Index
 
 
@@ -96,6 +56,24 @@ class TestIndex(unittest.TestCase):
             self.assertEqual(idx.source_count("file"), 1)
             self.assertEqual(idx.source_count("web"), 1)
             self.assertEqual(idx.source_count(), 2)
+            idx.close()
+
+    def test_purge_junk_web_sources_removes_blocked_hosts(self):
+        with tempfile.TemporaryDirectory() as d:
+            idx = self._make(d)
+            idx.add_source(source_type="web", location="https://merriam-webster.com/x", title="Def", text="a definition")
+            idx.add_source(source_type="web", location="https://example.com/x", title="Good", text="real content")
+            removed = idx.purge_junk_web_sources()
+            self.assertEqual(removed, 1)
+            self.assertEqual(idx.source_count("web"), 1)
+            idx.close()
+
+    def test_purge_only_affects_web_sources(self):
+        with tempfile.TemporaryDirectory() as d:
+            idx = self._make(d)
+            idx.add_source(source_type="file", location="/dictionary-notes.txt", title="X", text="local text")
+            idx.purge_junk_web_sources()
+            self.assertEqual(idx.source_count("file"), 1)
             idx.close()
 
     def test_clear_removes_all_sources(self):

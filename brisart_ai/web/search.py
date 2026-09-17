@@ -27,41 +27,14 @@ Communication / relationships
 Settings / parameters
 ----------------------
 - Provider URLs and _BLOCK_MARKERS / _SEARCH_HOSTS / _RESULT_LINK_CLASSES.
-- search_public_web(with_titles=False, with_snippets=False): default
-  returns list[str]; with_titles=True returns list[tuple[str, str]]
-  (unchanged); with_snippets=True returns list[tuple[str, str, str]]
-  (url, title, snippet). Every provider now captures its own snippet/
-  description text internally regardless of which shape is requested,
-  so relatedness judging always has it available (see KI-006).
-- _ResultLinkParser.SNIPPET_CHAR_CAP (300): bounds how much trailing
-  text after a result's title link is captured as its snippet.
+- search_public_web(with_titles=False): default list[str], with_titles=True
+  returns list[tuple[str, str]].
 
 Edge cases
 ----------
 - _decode_bing_target() unwraps Bing's /ck/a redirect via brisart_codec.
-- _partition_related_results() judges each result individually, and
-  accepts either (url, title) pairs or (url, title, snippet) triples --
-  a snippet, when present, is folded into the relatedness check, so an
-  entity-answer page (e.g. a page titled just "Paris - Wikipedia" for
-  "what is the capital of france") is no longer discarded before ranking
-  ever sees it, provided the provider returned a snippet for it.
-- Every provider function is implemented directly in this file, and all
-  seven now return (url, title, snippet) triples uniformly.
-
-Known limitations
------------------
-- Scrapes public HTML endpoints of several search providers; provider
-  markup changes can break a parser until updated (multiple providers
-  mitigate but do not eliminate this).
-- Honors block markers and falls back across providers, but a query all
-  providers block returns nothing rather than an error.
-- No API keys are used; result quality/quantity is whatever the public
-  HTML surfaces expose.
-
-Examples
---------
-    >>> results, outcome = search_public_web("who founded microsoft")   # doctest: +SKIP
-    >>> results[0].url                                                   # doctest: +SKIP
+- _partition_related_results() judges each result individually.
+- Every provider function is implemented directly in this file.
 """
 from __future__ import annotations
 
@@ -123,21 +96,15 @@ def _parse_qs(query: str, keep_blank_values: bool = False) -> Dict[str, List[str
 
 
 class _ResultLinkParser(BrisartMarkupParser):
-    """Collect *organic search result* anchor URLs, plus a bounded snippet
-    of the trailing description text a real search results page shows
-    alongside each result -- captured so relatedness judging and ranking
-    are not limited to URL + title alone (see KI-006)."""
-
-    SNIPPET_CHAR_CAP = 300
+    """Collect only *organic search result* anchor URLs."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.links: List[Tuple[str, str, str]] = []
+        self.links: List[Tuple[str, str]] = []
         self._title_depth = 0
         self._capturing = False
         self._current_href = ""
         self._current_text: List[str] = []
-        self._pending_entry: Optional[List] = None  # [href, title, snippet_parts]
 
     def _class_is_result(self, attrs) -> bool:
         for name, value in attrs:
@@ -148,13 +115,6 @@ class _ResultLinkParser(BrisartMarkupParser):
                 if result_class in classes:
                     return True
         return False
-
-    def _flush_pending(self) -> None:
-        if self._pending_entry:
-            href, title, snippet_parts = self._pending_entry
-            snippet = " ".join(p for p in snippet_parts if p).strip()[: self.SNIPPET_CHAR_CAP]
-            self.links.append((href, title, snippet))
-        self._pending_entry = None
 
     def handle_starttag(self, tag, attrs) -> None:
         lowered_tag = tag.casefold()
@@ -171,7 +131,6 @@ class _ResultLinkParser(BrisartMarkupParser):
         if not href:
             return
         if self._title_depth > 0 or self._class_is_result(attrs):
-            self._flush_pending()
             self._capturing = True
             self._current_href = href
             self._current_text = []
@@ -179,10 +138,6 @@ class _ResultLinkParser(BrisartMarkupParser):
     def handle_data(self, data) -> None:
         if self._capturing:
             self._current_text.append(str(data))
-        elif self._pending_entry is not None:
-            cleaned = str(data).strip()
-            if cleaned:
-                self._pending_entry[2].append(cleaned)
 
     def handle_endtag(self, tag) -> None:
         lowered_tag = tag.casefold()
@@ -194,14 +149,10 @@ class _ResultLinkParser(BrisartMarkupParser):
             return
         if self._capturing and self._current_href:
             text = " ".join(part.strip() for part in self._current_text if part.strip())
-            self._pending_entry = [self._current_href, text, []]
+            self.links.append((self._current_href, text))
         self._capturing = False
         self._current_href = ""
         self._current_text = []
-
-    def close(self) -> None:
-        self._flush_pending()
-        super().close()
 
 
 def _request_headers() -> Dict[str, str]:
@@ -266,46 +217,27 @@ def _looks_blocked(raw_text: str) -> bool:
 
 
 def _partition_related_results(
-    query: str, results: Sequence[Tuple],
-) -> Tuple[List[Tuple], List[Tuple]]:
-    """Split provider results into (related, unrelated), judged per-result.
-    Accepts either (url, title) pairs or (url, title, snippet) triples --
-    when a snippet is present it is folded into the relatedness check, so
-    an entity-answer page (e.g. a page titled just "Paris - Wikipedia" for
-    "what is the capital of france") is not discarded before ranking ever
-    sees it just because the answer word lives in the snippet, not the
-    title (see KI-006)."""
+    query: str, results: Sequence[Tuple[str, str]],
+) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+    """Split provider results into (related, unrelated), judged per-result."""
     terms = {
         word for word in re.findall(r"[a-z0-9]+", str(query or "").casefold())
-        if len(word) > 2 and word not in FUNCTION_WORDS
+        if len(word) > 3 and word not in FUNCTION_WORDS
     }
     if not terms:
         return list(results), []
 
-    related: List[Tuple] = []
-    unrelated: List[Tuple] = []
-    for item in results:
-        url, title = item[0], item[1]
-        snippet = item[2] if len(item) > 2 else ""
-        # Match on WHOLE-WORD boundaries, not raw substrings. A substring
-        # check falsely relates "war" to "warehouse", "tax" to "taxi",
-        # "won" to "wonderland", "end" to "friend", etc. -- exactly the
-        # off-topic decoys that used to slip through. Tokenize the URL +
-        # title + snippet into words and compare token-by-token, with a
-        # symmetric single-'s' plural fold so "cats" still matches "cat".
-        haystack_tokens = set(re.findall(r"[a-z0-9]+", f"{url} {title} {snippet}".casefold()))
+    related: List[Tuple[str, str]] = []
+    unrelated: List[Tuple[str, str]] = []
+    for url, title in results:
+        haystack = f"{url} {title}".casefold()
         matched = False
         for term in terms:
-            if term in haystack_tokens:
+            stem = term.rstrip("s")
+            if term in haystack or (len(stem) >= 3 and stem in haystack):
                 matched = True
                 break
-            # symmetric plural fold: term<->token differ only by a trailing 's'
-            if (term + "s") in haystack_tokens or (
-                term.endswith("s") and term[:-1] in haystack_tokens
-            ):
-                matched = True
-                break
-        (related if matched else unrelated).append(item)
+        (related if matched else unrelated).append((url, title))
     return related, unrelated
 
 
@@ -435,14 +367,10 @@ def _normalize_result_url(href: str, base_url: str) -> str:
     return candidate
 
 
-def _deduplicate(results: Sequence[Tuple], limit: int) -> List[Tuple]:
-    """De-duplicate by normalized URL, preserving whatever else each item
-    carries (title only, or title+snippet) -- generic over tuple length
-    so both 2-tuple and 3-tuple provider outputs share one implementation."""
-    deduplicated: List[Tuple] = []
+def _deduplicate(results: Sequence[Tuple[str, str]], limit: int) -> List[Tuple[str, str]]:
+    deduplicated: List[Tuple[str, str]] = []
     seen = set()
-    for item in results:
-        url, rest = item[0], item[1:]
+    for url, title in results:
         normalized = normalize_url(url)
         if not normalized:
             continue
@@ -450,13 +378,13 @@ def _deduplicate(results: Sequence[Tuple], limit: int) -> List[Tuple]:
         if comparison_key in seen:
             continue
         seen.add(comparison_key)
-        deduplicated.append((normalized,) + tuple(str(value or "") for value in rest))
+        deduplicated.append((normalized, str(title or "")))
         if len(deduplicated) >= limit:
             break
     return deduplicated
 
 
-def _parse_html_results(raw_html: str, base_url: str, limit: int) -> List[Tuple[str, str, str]]:
+def _parse_html_results(raw_html: str, base_url: str, limit: int) -> List[Tuple[str, str]]:
     parser = _ResultLinkParser()
     try:
         parser.feed(raw_html)
@@ -464,15 +392,15 @@ def _parse_html_results(raw_html: str, base_url: str, limit: int) -> List[Tuple[
     except Exception as exc:
         print(f"WARN: could not parse search HTML: {exc}")
         return []
-    candidates: List[Tuple[str, str, str]] = []
-    for href, visible_text, snippet in parser.links:
+    candidates: List[Tuple[str, str]] = []
+    for href, visible_text in parser.links:
         result_url = _normalize_result_url(href, base_url)
         if result_url:
-            candidates.append((result_url, visible_text, snippet))
+            candidates.append((result_url, visible_text))
     return _deduplicate(candidates, limit)
 
 
-def _search_duckduckgo_html(query: str, limit: int) -> List[Tuple[str, str, str]]:
+def _search_duckduckgo_html(query: str, limit: int) -> List[Tuple[str, str]]:
     raw_html = _http_post(DUCKDUCKGO_HTML_URL, {"q": query, "kl": "us-en"})
     if not raw_html:
         return []
@@ -482,7 +410,7 @@ def _search_duckduckgo_html(query: str, limit: int) -> List[Tuple[str, str, str]
     return _parse_html_results(raw_html, DUCKDUCKGO_HTML_URL, limit)
 
 
-def _search_duckduckgo_lite(query: str, limit: int) -> List[Tuple[str, str, str]]:
+def _search_duckduckgo_lite(query: str, limit: int) -> List[Tuple[str, str]]:
     raw_html = _http_get(DUCKDUCKGO_LITE_URL, {"q": query, "kl": "us-en"})
     if not raw_html:
         return []
@@ -492,7 +420,7 @@ def _search_duckduckgo_lite(query: str, limit: int) -> List[Tuple[str, str, str]
     return _parse_html_results(raw_html, DUCKDUCKGO_LITE_URL, limit)
 
 
-def _search_bing_html(query: str, limit: int) -> List[Tuple[str, str, str]]:
+def _search_bing_html(query: str, limit: int) -> List[Tuple[str, str]]:
     raw_html = _http_get(BING_SEARCH_URL, {"q": query, "count": "10", "setlang": "en-US", "mkt": "en-US"})
     if not raw_html:
         return []
@@ -640,8 +568,10 @@ def _run_extra_provider(provider_label: str, search_url: str, engine_host: str, 
         return ProviderOutcome(debug_note=f"WARN: {provider_label} request failed ({exc}).")
     except ValueError as exc:
         return ProviderOutcome(debug_note=f"WARN: {provider_label} request failed ({exc}).")
+
     if _looks_like_challenge_page(raw_html):
         return ProviderOutcome(debug_note=f"WARN: {provider_label} returned a challenge or consent page.")
+
     results = _extract_result_links(raw_html, engine_host, limit)
     if not results:
         return ProviderOutcome(
@@ -668,39 +598,33 @@ def _startpage_provider(query: str, limit: int = 5) -> ProviderOutcome:
     return _run_extra_provider("Startpage", search_url, "www.startpage.com", limit)
 
 
-def _adapt_extra_provider(provider_fn, query: str, limit: int) -> List[Tuple[str, str, str]]:
+def _adapt_extra_provider(provider_fn, query: str, limit: int) -> List[Tuple[str, str]]:
     outcome = provider_fn(query, limit=limit)
     if outcome.debug_note and not outcome.results:
         print(outcome.debug_note)
     if not outcome.results:
         return []
-    normalized: List[Tuple[str, str, str]] = []
+    normalized: List[Tuple[str, str]] = []
     for result in outcome.results:
         cleaned_url = _normalize_result_url(result.url, result.url)
         if cleaned_url:
-            # result.snippet was already captured by _ResultLinkTextParser
-            # (see _extract_result_links) but previously discarded here --
-            # now preserved so it can be folded into relatedness/ranking.
-            normalized.append((cleaned_url, result.title, result.snippet))
+            normalized.append((cleaned_url, result.title))
     return normalized
 
 
-def _search_startpage(query: str, limit: int) -> List[Tuple[str, str, str]]:
+def _search_startpage(query: str, limit: int) -> List[Tuple[str, str]]:
     return _adapt_extra_provider(_startpage_provider, query, limit)
 
 
-def _search_brave(query: str, limit: int) -> List[Tuple[str, str, str]]:
+def _search_brave(query: str, limit: int) -> List[Tuple[str, str]]:
     return _adapt_extra_provider(_brave_provider, query, limit)
 
 
-def _search_mojeek(query: str, limit: int) -> List[Tuple[str, str, str]]:
+def _search_mojeek(query: str, limit: int) -> List[Tuple[str, str]]:
     return _adapt_extra_provider(_mojeek_provider, query, limit)
 
 
-_WIKI_SNIPPET_TAG_RE = re.compile(r"<[^>]+>")
-
-
-def _search_wikipedia_api(query: str, limit: int) -> List[Tuple[str, str, str]]:
+def _search_wikipedia_api(query: str, limit: int) -> List[Tuple[str, str]]:
     request_url = WIKIPEDIA_API_URL + "?" + brisart_urlencode(
         [
             ("action", "query"), ("list", "search"), ("srsearch", query),
@@ -736,37 +660,24 @@ def _search_wikipedia_api(query: str, limit: int) -> List[Tuple[str, str, str]]:
     except (KeyError, TypeError):
         print("WARN: Wikipedia API response contained no search results.")
         return []
-    candidates: List[Tuple[str, str, str]] = []
+    candidates: List[Tuple[str, str]] = []
     for match in matches:
         if not isinstance(match, dict):
             continue
         title = str(match.get("title") or "").strip()
         if not title:
             continue
-        # Wikipedia's own snippet field carries <span class="searchmatch">
-        # markup around matched terms; strip it defensively so no raw HTML
-        # ever reaches relatedness judging or ranking.
-        raw_snippet = str(match.get("snippet") or "")
-        snippet = brisart_unescape(_WIKI_SNIPPET_TAG_RE.sub("", raw_snippet))
         article_url = WIKIPEDIA_ARTICLE_BASE + brisart_quote(title.replace(" ", "_"), safe="")
         normalized = _normalize_result_url(article_url, WIKIPEDIA_ARTICLE_BASE)
         if normalized:
-            candidates.append((normalized, title, snippet))
+            candidates.append((normalized, title))
     return _deduplicate(candidates, limit)
 
 
 def search_public_web(
-    query: str, limit: int = 5, with_titles: bool = False, with_snippets: bool = False,
-) -> Union[List[str], List[Tuple[str, str]], List[Tuple[str, str, str]]]:
-    """Search public providers and return normalized results.
-
-    Every provider is now queried with its snippet/description text
-    captured internally (see KI-006's resolution), so relatedness judging
-    always has url + title + snippet to work with regardless of which
-    output shape a caller asks for. with_snippets=True returns
-    (url, title, snippet) triples; with_titles=True (unchanged) returns
-    (url, title) pairs; the default (both False) returns a bare list of
-    URLs, byte-identical to every existing caller's prior behavior."""
+    query: str, limit: int = 5, with_titles: bool = False,
+) -> Union[List[str], List[Tuple[str, str]]]:
+    """Search public providers and return normalized results."""
     cleaned_query = " ".join(str(query or "").split())
     if not cleaned_query:
         print("WARN: public web search received an empty query.")
@@ -787,7 +698,7 @@ def search_public_web(
         ("Wikipedia API", _search_wikipedia_api),
     )
 
-    collected: List[Tuple[str, str, str]] = []
+    collected: List[Tuple[str, str]] = []
     for provider_name, provider in providers:
         remaining = result_limit - len(collected)
         if remaining <= 0:
@@ -826,11 +737,9 @@ def search_public_web(
     if not collected:
         print("No usable public search results were returned by any available provider.")
 
-    if with_snippets:
-        return [(url, title, snippet) for url, title, snippet in collected]
     if with_titles:
-        return [(url, title) for url, title, _snippet in collected]
-    return [url for url, _title, _snippet in collected]
+        return list(collected)
+    return [url for url, _title in collected]
 
 
 __all__ = ["search_public_web"]

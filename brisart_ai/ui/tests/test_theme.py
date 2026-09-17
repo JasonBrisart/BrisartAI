@@ -1,42 +1,9 @@
-"""
-File: brisart_ai/ui/tests/test_theme.py
+"""Tests for brisart_ai/ui/theme.py -- shared color palette and font tuples.
 
-Purpose
--------
-Unit tests for brisart_ai.ui. Verifies the module's public
-behavior and its documented edge cases so regressions are caught
-before release. Contains 8 test cases across TestThemeConstants.
-
-Communication / relationships
-------------------------------
-- exercises brisart_ai.ui (theme)
-
-Settings / parameters
----------------------
-- Standard unittest.TestCase suite; run with pytest
-  (--import-mode=importlib) or `python -m pytest`.
-- Uses only in-memory / temp-dir fixtures where any state is
-  needed; no network, no external services, no shared global state.
-- No tunable parameters of its own; assertions pin the behavior
-  and point values defined in the module under test.
-
-Edge cases
-----------
-- asserts: background colors are hex strings.
-- asserts: foreground colors are hex strings.
-- asserts: border color is hex string.
-
-Known limitations
------------------
-- Covers the behaviors enumerated above; paths not listed here are
-  not asserted by this file and may be covered elsewhere.
-- Deterministic and offline by design; it does not exercise real
-  network, GUI display, or concurrency behavior.
-
-Examples
---------
-    $ python -m pytest brisart_ai/ui/tests/test_theme.py -v
-    $ python -m pytest brisart_ai/ui/tests/test_theme.py --import-mode=importlib
+theme.py has no Tk imports and no side effects, so it is fully testable
+without a display -- unlike app.py/chat_panel.py/dialogs.py/sidebar.py/
+service.py's GUI classes, which require a live Tk display and are
+exercised manually rather than under headless unit tests.
 """
 import unittest
 from brisart_ai.ui import theme
@@ -94,6 +61,3 @@ class TestThemeConstants(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-

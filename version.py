@@ -35,19 +35,5 @@ Edge cases
   introduced by a bad manual edit, for instance),
   brisart_ai/version_info.py falls back to "0.0.0-unknown" rather than
   raising, so a broken version.py can never crash application startup.
-
-Known limitations
------------------
-- Contains a single string assignment and nothing else; there is no
-  logic to fail, and no runtime configuration.
-- The value must be bumped by hand at release time; nothing derives or
-  validates it automatically.
-
-Examples
---------
-    >>> import version
-    >>> isinstance(version.__version__, str)
-    True
 """
-__version__ = "1.2.6"
-
+__version__ = "1.0.0"

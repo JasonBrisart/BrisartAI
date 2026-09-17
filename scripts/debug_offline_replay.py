@@ -23,18 +23,6 @@ Edge cases
 ----------
 - Fixture database lives in a temp dir, deleted on exit.
 - Exit status is non-zero when a fixture's expected top chunk doesn't win.
-
-Known limitations
------------------
-- A developer replay harness over recorded fixtures; it is not part of the
-  shipped app and depends on fixture files being present.
-- Reproduces ranking decisions deterministically but only for the queries
-  captured in the fixtures.
-
-Examples
---------
-    $ python scripts/debug_offline_replay.py       # replay all fixtures
-    >>> run_fixture(path)                           # doctest: +SKIP
 """
 from __future__ import annotations
 
@@ -192,5 +180,3 @@ def main(argv: Sequence[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-
-

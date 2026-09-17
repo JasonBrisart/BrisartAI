@@ -22,22 +22,6 @@ Edge cases
 - read_pdf_best_effort() finds literal parenthesized runs, then
   DEFLATE-decompresses stream...endstream blocks via brisart_zlib_decompress().
 - Every function returns "" on any failure rather than raising.
-
-Known limitations
------------------
-- Each reader is a minimal, dependency-free unzip/XML text scrape, not a
-  full office-format parser; complex layouts, embedded objects, and
-  styling are ignored -- only extractable text is returned.
-- read_pdf_best_effort() is explicitly best-effort: encrypted, scanned,
-  or heavily compressed PDFs may yield little or no text (no OCR).
-- A corrupt or unsupported container returns "" rather than raising.
-
-Examples
---------
-    >>> text = read_docx("report.docx")          # -> plain text body
-    >>> text = read_xlsx("data.xlsx")            # -> tab/newline joined cells
-    >>> read_pdf_best_effort("missing.pdf")
-    ''
 """
 from __future__ import annotations
 
@@ -149,6 +133,3 @@ def read_pdf_best_effort(path: Path, max_bytes: int = 10_000_000) -> str:
     text = "\n".join(chunks)
     text = re.sub(r"\s+", " ", text).strip()
     return text
-
-
-

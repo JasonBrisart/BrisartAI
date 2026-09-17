@@ -37,23 +37,6 @@ Edge cases
   table entry).
 - An empty input encodes to an empty string and decodes back to empty
   bytes, exercised explicitly by this module's self-test.
-
-Known limitations
------------------
-- Implements standard and URL-safe Base64 only; other encodings
-  (Base32/Base85/Base58) are out of scope.
-- brisart_b64decode() validates the alphabet and padding and raises on
-  malformed input rather than silently truncating.
-- Pure-Python byte loops: correct and dependency-free, but slower than
-  the C-backed stdlib base64 on very large inputs.
-
-Examples
---------
-    >>> brisart_b64encode(b"hi")
-    b'aGk='
-    >>> brisart_b64decode(b"aGk=")
-    b'hi'
-    >>> brisart_urlsafe_b64decode(b"a-b_")        # doctest: +SKIP
 """
 from __future__ import annotations
 
@@ -165,6 +148,3 @@ if __name__ == "__main__":
 
 
 __all__ = ["brisart_b64encode", "brisart_b64decode", "brisart_urlsafe_b64decode"]
-
-
-

@@ -8,57 +8,22 @@ center of the BrisartAI window.
 
 Communication / relationships
 ------------------------------
-- brisart_ai/ui/app.py: constructs ChatPanel and calls append_*(). After
-  every assistant answer that carries citations, app.py also calls
-  render_citation_controls(citations, on_mark), which embeds a small
-  relevant/irrelevant control row per cited source directly into the
-  transcript, right under that answer.
+- brisart_ai/ui/app.py: constructs ChatPanel and calls append_*().
 - Imports brisart_ai.ui.theme for every color/font constant used.
 
 Settings / parameters
 ----------------------
 - on_submit: callback invoked with stripped, non-empty input text.
-- render_citation_controls(citations, on_mark): citations is the list of
-  {"index", "title", ...} dicts from BrisartService.last_citations;
-  on_mark(citation, relevant: bool) is called when a control is pressed.
-  citations=[] (no cited sources for that answer) renders nothing.
 
 Edge cases
 ----------
-- The transcript is read-only outside of append()/
-  render_citation_controls().
+- The transcript is read-only outside of append().
 - append() auto-scrolls to the bottom after every message.
-- render_citation_controls() is a no-op for an empty citations list, so an
-  uncited answer (e.g. "I don't have any indexed information...") never
-  grows a stray, empty controls row.
-- Each citation's controls are embedded ONCE, at the point they're
-  rendered; marking one does not remove or grey out its buttons -- the
-  user can press Relevant/Irrelevant more than once, and
-  RelevanceFeedback's own per-term clamping (see
-  knowledge/relevance_feedback.py) is what keeps repeated marks bounded,
-  not this widget.
-
-Known limitations
------------------
-- A Tkinter view widget only; it renders text and citation controls the
-  service produces and holds no business logic or ranking behavior of its
-  own -- marking itself is entirely BrisartService.mark_citation()'s job.
-- Rendering is plain text with light tagging, not rich HTML/markdown.
-- Requires a display; not exercised by the headless test suite.
-
-Examples
---------
-    >>> panel = ChatPanel(parent, on_submit=cb)    # doctest: +SKIP
-    >>> panel.append_assistant("some answer text") # doctest: +SKIP
-    >>> panel.render_citation_controls(            # doctest: +SKIP
-    ...     [{"index": 1, "title": "History of Microsoft"}],
-    ...     on_mark=lambda citation, relevant: None)
 """
 from __future__ import annotations
 
 import tkinter as tk
 from tkinter import scrolledtext, ttk
-from typing import Callable, Dict, List, Optional
 
 from brisart_ai.ui import theme
 
@@ -126,58 +91,8 @@ class ChatPanel(ttk.Frame):
     def append_system(self, text: str) -> None:
         self.append(text, "system")
 
-    def render_citation_controls(
-        self,
-        citations: List[Dict[str, object]],
-        on_mark: Callable[[Dict[str, object], bool], None],
-    ) -> None:
-        """Embed one Relevant/Irrelevant control row per cited source,
-        directly under the most recently appended assistant answer. A
-        no-op when `citations` is empty (an uncited answer grows no
-        stray controls row)."""
-        if not citations:
-            return
-        self.transcript.configure(state="normal")
-        self.transcript.insert("end", "\n")
-        container = ttk.Frame(self.transcript, style="Panel.TFrame")
-        for citation in citations:
-            self._add_citation_row(container, citation, on_mark)
-        self.transcript.window_create("end", window=container)
-        self.transcript.configure(state="disabled")
-        self.transcript.see("end")
-
-    def _add_citation_row(
-        self,
-        container: ttk.Frame,
-        citation: Dict[str, object],
-        on_mark: Callable[[Dict[str, object], bool], None],
-    ) -> None:
-        row = ttk.Frame(container, style="Panel.TFrame")
-        row.pack(fill="x", pady=1)
-        title = str(citation.get("title") or citation.get("location") or "source")
-        label = tk.Label(
-            row, text=f"[{citation.get('index', '?')}] {title}", bg=theme.BG_CHAT,
-            fg=theme.FG_SYSTEM, font=("Consolas", 9), anchor="w",
-        )
-        label.pack(side="left", fill="x", expand=True, padx=(theme.PAD, theme.PAD_SMALL))
-        relevant_btn = tk.Button(
-            row, text="\U0001F44D Relevant", bg=theme.BG_INPUT, fg=theme.FG_SUCCESS,
-            activebackground=theme.BG_PANEL, relief="flat", font=("Segoe UI", 8),
-            command=lambda c=citation: on_mark(c, True),
-        )
-        relevant_btn.pack(side="left", padx=(0, theme.PAD_SMALL))
-        irrelevant_btn = tk.Button(
-            row, text="\U0001F44E Irrelevant", bg=theme.BG_INPUT, fg=theme.FG_WARN,
-            activebackground=theme.BG_PANEL, relief="flat", font=("Segoe UI", 8),
-            command=lambda c=citation: on_mark(c, False),
-        )
-        irrelevant_btn.pack(side="left", padx=(0, theme.PAD))
-
     def focus_input(self) -> None:
         self.entry.focus_set()
 
 
 __all__ = ["ChatPanel"]
-
-
-

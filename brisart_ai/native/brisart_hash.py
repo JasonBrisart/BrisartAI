@@ -52,22 +52,6 @@ Edge cases
   addition, exactly matching modulo-2^32 addition -- Python integers
   are arbitrary precision, so this mask is REQUIRED, not optional
   defensive code.
-
-Known limitations
------------------
-- A from-scratch SHA-256 implementation for provenance/dedup keys; it is
-  correct against FIPS 180-4 test vectors but pure-Python and therefore
-  slower than hashlib on large inputs.
-- SHA-256 only; no other digest sizes or algorithms are provided.
-- Not intended as a hardened primitive against side-channel attacks.
-
-Examples
---------
-    >>> brisart_sha256(b"abc").hexdigest()[:12]
-    'ba7816bf8f01'
-    >>> h = BrisartHash256(); h.update(b"a"); h.update(b"bc")
-    >>> h.hexdigest() == brisart_sha256(b"abc").hexdigest()
-    True
 """
 from __future__ import annotations
 
@@ -228,6 +212,3 @@ if __name__ == "__main__":
 
 
 __all__ = ["BrisartHash256", "brisart_sha256", "brisart_stable_hash"]
-
-
-

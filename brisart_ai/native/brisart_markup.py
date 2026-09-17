@@ -55,21 +55,6 @@ Edge cases
   or entity reference spanning a feed() boundary is buffered internally
   and completed on the next feed() call, mirroring
   html.parser.HTMLParser's own incremental-feed contract.
-
-Known limitations
------------------
-- A tolerant HTML tokenizer/entity unescaper, not a spec-compliant HTML5
-  tree builder; malformed nesting is handled leniently, not corrected.
-- _NAMED_ENTITIES covers common entities only; an unlisted named entity
-  is left as literal text.
-- Raw-text elements (script/style) are recognized but their contents are
-  discarded, not parsed.
-
-Examples
---------
-    >>> brisart_unescape("Tom &amp; Jerry &lt;3")
-    'Tom & Jerry <3'
-    >>> p = BrisartMarkupParser(); p.feed("<p>hi</p>")   # doctest: +SKIP
 """
 from __future__ import annotations
 
@@ -342,6 +327,3 @@ if __name__ == "__main__":
 
 
 __all__ = ["BrisartMarkupParser", "brisart_unescape"]
-
-
-

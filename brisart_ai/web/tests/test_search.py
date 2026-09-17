@@ -1,3 +1,4 @@
+"""Tests for brisart_ai/web/search.py -- pure-logic helpers (no live network calls)."""
 import unittest
 from brisart_ai.web.search import (
     _decode_bing_target, _decode_duckduckgo_target, _deduplicate, _is_search_host,
@@ -50,10 +51,19 @@ class TestRemoveTrackingParameters(unittest.TestCase):
         self.assertNotIn("fbclid", result)
         self.assertIn("keep=1", result)
 
+    def test_no_tracking_params_unchanged_semantically(self):
+        url = "https://example.com/x?a=1&b=2"
+        result = _remove_tracking_parameters(url)
+        self.assertIn("a=1", result)
+        self.assertIn("b=2", result)
+
 
 class TestIsSearchHost(unittest.TestCase):
     def test_bing_is_search_host(self):
         self.assertTrue(_is_search_host("www.bing.com"))
+
+    def test_duckduckgo_is_search_host(self):
+        self.assertTrue(_is_search_host("html.duckduckgo.com"))
 
     def test_ordinary_host_is_not_search_host(self):
         self.assertFalse(_is_search_host("example.com"))
@@ -86,6 +96,11 @@ class TestDeduplicate(unittest.TestCase):
         deduped = _deduplicate(results, limit=10)
         self.assertEqual(len(deduped), 1)
 
+    def test_trailing_slash_treated_as_duplicate(self):
+        results = [("https://a.com/x", "A"), ("https://a.com/x/", "A2")]
+        deduped = _deduplicate(results, limit=10)
+        self.assertEqual(len(deduped), 1)
+
     def test_respects_limit(self):
         results = [(f"https://a.com/{i}", f"T{i}") for i in range(10)]
         deduped = _deduplicate(results, limit=3)
@@ -105,38 +120,21 @@ class TestPartitionRelatedResults(unittest.TestCase):
         self.assertEqual(len(related), 0)
         self.assertEqual(len(unrelated), 1)
 
-    def test_entity_answer_page_dropped_without_snippet_2tuple(self):
-        # "Paris - Wikipedia" shares NO token with "capital"/"france", and
-        # a bare (url, title) pair (no snippet) has nothing else to check
-        # against -- this is the documented boundary of the fix, not a
-        # regression: without a snippet, there is nothing to fold in.
-        results = [("https://en.wikipedia.org/wiki/Paris", "Paris - Wikipedia")]
-        related, unrelated = _partition_related_results("what is the capital of france", results)
-        self.assertEqual(len(related), 0)
+    def test_mixed_batch_partitioned_individually(self):
+        # This is the actual fix for the "Tesla vandalism" decoy-result bug:
+        # a single unrelated result must not be waved through just because
+        # other results in the same batch are on-topic.
+        results = [
+            ("https://example.com/microsoft-history", "History of Microsoft"),
+            ("https://example.com/unrelated-vandalism", "2025 Article Vandalism Incident"),
+        ]
+        related, unrelated = _partition_related_results("who founded microsoft", results)
+        self.assertEqual(len(related), 1)
         self.assertEqual(len(unrelated), 1)
 
-    def test_entity_answer_page_kept_with_snippet_3tuple_FIX(self):
-        # The actual fix: once the provider's own snippet/description text
-        # is captured and passed through as a 3-tuple, the entity-answer
-        # page is correctly recognized as related, exactly as a real
-        # search engine's own results page would show it.
-        results = [(
-            "https://en.wikipedia.org/wiki/Paris",
-            "Paris - Wikipedia",
-            "Paris is the capital and most populous city of France.",
-        )]
-        related, unrelated = _partition_related_results("what is the capital of france", results)
-        self.assertEqual(len(related), 1, "FIX VERIFIED: snippet text rescues the entity-answer page")
-        self.assertEqual(len(unrelated), 0)
-
-    def test_inventor_entity_answer_kept_with_snippet_FIX(self):
-        results = [(
-            "https://en.wikipedia.org/wiki/Alexander_Graham_Bell",
-            "Alexander Graham Bell - Wikipedia",
-            "Alexander Graham Bell was a Scottish-born inventor, scientist, "
-            "and engineer who is credited with patenting the first practical telephone.",
-        )]
-        related, unrelated = _partition_related_results("who invented the telephone", results)
+    def test_no_meaningful_terms_returns_all_as_related(self):
+        results = [("https://example.com/x", "Something")]
+        related, unrelated = _partition_related_results("a an the", results)
         self.assertEqual(len(related), 1)
         self.assertEqual(len(unrelated), 0)
 

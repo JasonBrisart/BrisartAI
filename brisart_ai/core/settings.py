@@ -24,22 +24,6 @@ Edge cases
 ----------
 - load() creates defaults if missing; swallows corrupt files.
 - Only known boolean keys accepted on load.
-
-Known limitations
------------------
-- Only the fixed toggle keys in DEFAULT_SETTINGS are recognized; an
-  unknown key is ignored rather than stored.
-- Persistence is a flat JSON file; there is no schema migration if the
-  toggle set changes between versions.
-- Values are coerced to bool; non-boolean settings are not supported.
-
-Examples
---------
-    >>> s = ResearchSettings()
-    >>> s.get("search_local_files")
-    True
-    >>> s.set("auto_web_research", True); s.get("auto_web_research")
-    True
 """
 from __future__ import annotations
 
@@ -166,6 +150,3 @@ __all__ = [
     "DEFAULT_SETTINGS", "DEFAULT_SETTINGS_PATH", "ResearchSettings",
     "SETTING_ALIASES", "TOGGLE_LABELS",
 ]
-
-
-

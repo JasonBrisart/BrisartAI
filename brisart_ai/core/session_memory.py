@@ -22,22 +22,6 @@ Edge cases
 ----------
 - add() drops rows that compress to nothing.
 - Content capped at 400 chars at the SQL layer.
-
-Known limitations
------------------
-- Stores a compressed token summary of each turn, not full text, so
-  exact wording is not recoverable from memory.
-- recent_topics() is a simple recency de-dupe, not semantic clustering;
-  near-duplicate phrasings can both appear.
-- Single-file SQLite with no cross-process locking guarantees beyond
-  SQLite's own WAL mode.
-
-Examples
---------
-    >>> mem = SessionMemory(":memory:")
-    >>> mem.add("user", "who founded microsoft")
-    >>> mem.recent_topics(limit=4)
-    ['who founded microsoft']
 """
 from __future__ import annotations
 
@@ -100,6 +84,3 @@ class SessionMemory:
 
     def close(self) -> None:
         self.conn.close()
-
-
-

@@ -1,41 +1,4 @@
-"""
-File: brisart_ai/native/tests/test_brisart_markup.py
-
-Purpose
--------
-Unit tests for brisart_ai.native.brisart_markup. Verifies the module's public
-behavior and its documented edge cases so regressions are caught
-before release. Contains 13 test cases across _Collector, TestBrisartUnescape, TestBrisartMarkupParser.
-
-Communication / relationships
-------------------------------
-- exercises brisart_ai.native.brisart_markup (BrisartMarkupParser, brisart_unescape)
-
-Settings / parameters
----------------------
-- Standard unittest.TestCase suite; run with pytest
-  (--import-mode=importlib) or `python -m pytest`.
-- Uses only in-memory / temp-dir fixtures where any state is
-  needed; no network, no external services, no shared global state.
-- No tunable parameters of its own; assertions pin the behavior
-  and point values defined in the module under test.
-
-Edge cases
-----------
-- asserts: bare void element fires starttag not startendtag.
-
-Known limitations
------------------
-- Covers the behaviors enumerated above; paths not listed here are
-  not asserted by this file and may be covered elsewhere.
-- Deterministic and offline by design; it does not exercise real
-  network, GUI display, or concurrency behavior.
-
-Examples
---------
-    $ python -m pytest brisart_ai/native/tests/test_brisart_markup.py -v
-    $ python -m pytest brisart_ai/native/tests/test_brisart_markup.py --import-mode=importlib
-"""
+"""Tests for brisart_ai/native/brisart_markup.py -- BrisartMarkupParser HTML tokenizer."""
 import unittest
 from brisart_ai.native.brisart_markup import BrisartMarkupParser, brisart_unescape
 
@@ -153,6 +116,3 @@ class TestBrisartMarkupParser(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-

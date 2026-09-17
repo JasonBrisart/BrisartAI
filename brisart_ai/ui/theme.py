@@ -18,20 +18,6 @@ Settings / parameters
 Edge cases
 ----------
 - None -- this module has no logic, only literal constants.
-
-Known limitations
------------------
-- A flat palette of color/spacing constants; it defines no behavior and
-  imports nothing.
-- Single hard-coded dark theme; there is no runtime theme switching.
-- Colors are chosen for the desktop Tkinter shell, not validated for
-  every OS's native rendering.
-
-Examples
---------
-    >>> from brisart_ai.ui import theme
-    >>> theme.BG_APP.startswith("#")
-    True
 """
 from __future__ import annotations
 
@@ -64,6 +50,3 @@ PAD = 8
 PAD_SMALL = 4
 
 SIDEBAR_WIDTH = 210
-
-
-

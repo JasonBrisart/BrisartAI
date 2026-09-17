@@ -19,20 +19,6 @@ Edge cases
 ----------
 - Only a single layer of quotes is stripped.
 - An all-whitespace input returns "".
-
-Known limitations
------------------
-- Only strips a single matched pair of surrounding quotes and outer
-  whitespace; it does not unescape shell metacharacters or split args.
-- Not a shell parser -- embedded quotes and escapes inside the string
-  are left untouched.
-
-Examples
---------
-    >>> normalize_shellish_input('  "who founded microsoft"  ')
-    'who founded microsoft'
-    >>> normalize_shellish_input("plain text")
-    'plain text'
 """
 from __future__ import annotations
 
@@ -53,6 +39,3 @@ def normalize_shellish_input(text: str) -> str:
 
 
 __all__ = ["normalize_shellish_input"]
-
-
-

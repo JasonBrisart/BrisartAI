@@ -1,147 +1,146 @@
-"""
-File: brisart_ai/knowledge/tests/test_ranker.py
-
-Purpose
--------
-Unit tests for brisart_ai.knowledge.ranker. Verifies the module's public
-behavior and its documented edge cases so regressions are caught before
-release, including that the full standard signal stack (query expansion,
-spelling, authority, recency, session feedback, MMR diversity) never
-displaces the single best answer.
-
-Communication / relationships
-------------------------------
-- exercises brisart_ai.knowledge.index (Index)
-- exercises brisart_ai.knowledge.ranker (generic_concept_title_adjust,
-  phrase_match_adjust, search, title_match_adjust)
-- exercises brisart_ai.knowledge.relevance_feedback (RelevanceFeedback)
-
-Settings / parameters
----------------------
-- Standard unittest.TestCase suite; run with pytest
-  (--import-mode=importlib) or `python -m pytest`.
-- Uses only in-memory / temp-dir fixtures; no network, no shared state.
-- No tunable parameters of its own.
-
-Edge cases
-----------
-- asserts: empty query.
-- asserts: no match.
-- asserts: the standard feedback + diversity path preserves the top result.
-
-Known limitations
------------------
-- Covers the behaviors enumerated above; paths not listed here may be
-  covered elsewhere.
-- Deterministic and offline by design.
-
-Examples
---------
-    $ python -m pytest brisart_ai/knowledge/tests/test_ranker.py -v
-    $ python -m pytest brisart_ai/knowledge/tests/test_ranker.py --import-mode=importlib
-"""
-import tempfile, unittest
+"""Tests for brisart_ai/knowledge/ranker.py -- retrieval and intent-aware ranking."""
+import tempfile
+import unittest
 from pathlib import Path
 from brisart_ai.knowledge.index import Index
-from brisart_ai.knowledge.ranker import (generic_concept_title_adjust, phrase_match_adjust,
-                                          search, title_match_adjust)
-from brisart_ai.knowledge.relevance_feedback import RelevanceFeedback
+from brisart_ai.knowledge.ranker import (
+    generic_concept_title_adjust, phrase_match_adjust, search, title_match_adjust,
+)
 
 
 class TestSearch(unittest.TestCase):
-    def _mk(self, d): return Index(str(Path(d)/"t.sqlite"))
+    def _make(self, tmpdir):
+        return Index(str(Path(tmpdir) / "test.sqlite"))
 
-    def test_empty_query(self):
+    def test_empty_query_returns_no_results(self):
         with tempfile.TemporaryDirectory() as d:
-            i = self._mk(d); i.add_source("file","/a.txt","A","hello world")
-            self.assertEqual(search(i,""), []); i.close()
+            idx = self._make(d)
+            idx.add_source(source_type="file", location="/a.txt", title="A", text="hello world")
+            self.assertEqual(search(idx, ""), [])
+            idx.close()
 
-    def test_no_match(self):
+    def test_no_matching_documents_returns_empty(self):
         with tempfile.TemporaryDirectory() as d:
-            i = self._mk(d); i.add_source("file","/a.txt","A","hello world")
-            self.assertEqual(search(i,"zzzznonexistentterm"), []); i.close()
+            idx = self._make(d)
+            idx.add_source(source_type="file", location="/a.txt", title="A", text="hello world")
+            self.assertEqual(search(idx, "zzzznonexistentterm"), [])
+            idx.close()
 
-    def test_match(self):
+    def test_matching_document_is_returned(self):
         with tempfile.TemporaryDirectory() as d:
-            i = self._mk(d); i.add_source("file","/a.txt","A","the giraffe is tall")
-            r = search(i,"giraffe"); self.assertEqual(len(r),1); i.close()
+            idx = self._make(d)
+            idx.add_source(source_type="file", location="/a.txt", title="A", text="the giraffe is tall")
+            results = search(idx, "giraffe")
+            self.assertEqual(len(results), 1)
+            self.assertIn("giraffe", results[0]["text"])
+            idx.close()
 
-    def test_source_types(self):
+    def test_source_types_filter_restricts_scope(self):
         with tempfile.TemporaryDirectory() as d:
-            i = self._mk(d)
-            i.add_source("file","/a.txt","A","unique zephyr content")
-            i.add_source("web","https://x.com","X","unique zephyr content")
-            r = search(i,"zephyr", source_types={"file"})
-            self.assertEqual(len(r),1); self.assertEqual(r[0]["source_type"],"file"); i.close()
+            idx = self._make(d)
+            idx.add_source(source_type="file", location="/a.txt", title="A", text="unique zephyr content")
+            idx.add_source(source_type="web", location="https://x.com", title="X", text="unique zephyr content")
+            file_only = search(idx, "zephyr", source_types={"file"})
+            self.assertEqual(len(file_only), 1)
+            self.assertEqual(file_only[0]["source_type"], "file")
+            idx.close()
 
-    def test_founder_regression(self):
+    def test_founder_intent_ranks_history_above_product_page(self):
+        # The classic regression case: "who invented microsoft?" should
+        # rank a founder/history document above a product manual page.
         with tempfile.TemporaryDirectory() as d:
-            i = self._mk(d)
-            i.add_source("file","/pp.txt","Microsoft PowerPoint","Microsoft PowerPoint is a presentation program. Slides can include text and images. Available for Windows and macOS.")
-            i.add_source("file","/h.txt","History of Microsoft","Microsoft was founded by Bill Gates and Paul Allen on April 4, 1975, in Albuquerque, New Mexico.")
-            r = search(i,"who invented microsoft?")
-            self.assertEqual(r[0]["title"],"History of Microsoft"); i.close()
+            idx = self._make(d)
+            idx.add_source(source_type="file", location="/powerpoint.txt", title="Microsoft PowerPoint",
+                text="Microsoft PowerPoint is a presentation program. Slides can include text and images. "
+                     "Available for Windows and macOS. Use the ribbon to change slide layout.")
+            idx.add_source(source_type="file", location="/history.txt", title="History of Microsoft",
+                text="Microsoft was founded by Bill Gates and Paul Allen on April 4, 1975, in Albuquerque, "
+                     "New Mexico. The two co-founders had previously written a BASIC interpreter.")
+            results = search(idx, "who invented microsoft?")
+            self.assertGreaterEqual(len(results), 1)
+            self.assertEqual(results[0]["title"], "History of Microsoft")
+            idx.close()
 
-    def test_statistic_regression(self):
+    def test_statistic_intent_finds_numeric_content(self):
         with tempfile.TemporaryDirectory() as d:
-            i = self._mk(d)
-            i.add_source("file","/b.txt","Cat breeds","There are many recognised cat breeds like the Siamese and Persian.")
-            i.add_source("file","/s.txt","Pet cat population statistics","An estimated 73.8 million pet cats live in the United States according to survey data.")
-            r = search(i,"how many cats are in america?")
-            self.assertEqual(r[0]["title"],"Pet cat population statistics"); i.close()
+            idx = self._make(d)
+            idx.add_source(source_type="file", location="/breeds.txt", title="Cat breeds",
+                text="There are many recognised cat breeds like the Siamese and Persian.")
+            idx.add_source(source_type="file", location="/stats.txt", title="Pet cat population statistics",
+                text="An estimated 73.8 million pet cats live in the United States according to survey data.")
+            results = search(idx, "how many cats are in america?")
+            self.assertGreaterEqual(len(results), 1)
+            self.assertEqual(results[0]["title"], "Pet cat population statistics")
+            idx.close()
 
-    def test_fields(self):
+    def test_result_documents_have_expected_fields(self):
         with tempfile.TemporaryDirectory() as d:
-            i = self._mk(d); i.add_source("file","/a.txt","A","unique searchable term xyzzy")
-            doc = search(i,"xyzzy")[0]
-            for f in ("id","score","source_type","location","title","text","intent","intent_boosts","intent_penalties","did_you_mean"):
-                self.assertIn(f, doc)
-            i.close()
+            idx = self._make(d)
+            idx.add_source(source_type="file", location="/a.txt", title="A", text="unique searchable term xyzzy")
+            results = search(idx, "xyzzy")
+            doc = results[0]
+            for field in ("id", "score", "source_type", "location", "title", "text", "intent", "intent_boosts", "intent_penalties"):
+                self.assertIn(field, doc)
+            idx.close()
 
-    def test_limit(self):
+    def test_limit_is_respected(self):
         with tempfile.TemporaryDirectory() as d:
-            i = self._mk(d)
-            for k in range(10): i.add_source("file",f"/d{k}.txt",f"Doc {k}",f"document number {k} discusses widgets extensively")
-            self.assertLessEqual(len(search(i,"widgets",limit=3)),3); i.close()
-
-    def test_spelling_correction(self):
-        with tempfile.TemporaryDirectory() as d:
-            i = self._mk(d); i.add_source("file","/m.txt","Microsoft history","Microsoft was founded in 1975.")
-            r = search(i,"mircosoft")
-            self.assertEqual(len(r),1); self.assertIn("microsoft", r[0]["did_you_mean"].get("mircosoft",[])); i.close()
-
-    def test_acronym_expansion(self):
-        with tempfile.TemporaryDirectory() as d:
-            i = self._mk(d); i.add_source("file","/ai.txt","Artificial intelligence overview","Artificial intelligence simulates human intelligence.")
-            self.assertEqual(len(search(i,"what is ai")),1); i.close()
-
-    def test_standard_feedback_and_diversity_preserve_top_result(self):
-        # Feedback and MMR diversity are part of the standard ranking path,
-        # not flags. A feedback store still preserves the single best answer,
-        # and diversity's first pick is always the top-scored document.
-        with tempfile.TemporaryDirectory() as d:
-            i = self._mk(d)
-            i.add_source("file","/a.txt","History of Microsoft","Microsoft was founded in 1975 by Gates.")
-            i.add_source("file","/b.txt","Microsoft account login","Sign in to your Microsoft account.")
-            fb = RelevanceFeedback(); fb.mark_irrelevant(2,"Microsoft account login")
-            r = search(i,"microsoft", feedback=fb)
-            self.assertTrue(len(r) >= 1)
-            self.assertEqual(r[0]["title"], "History of Microsoft")
-            i.close()
+            idx = self._make(d)
+            for i in range(10):
+                idx.add_source(source_type="file", location=f"/doc{i}.txt", title=f"Doc {i}",
+                    text=f"this document number {i} discusses widgets extensively")
+            results = search(idx, "widgets", limit=3)
+            self.assertLessEqual(len(results), 3)
+            idx.close()
 
 
-class TestAdjusters(unittest.TestCase):
-    def test_title_match(self):
-        f,_ = title_match_adjust("All About Cats", {"cats"}); self.assertGreater(f,1.0)
-    def test_generic_penalty(self):
-        f,_ = generic_concept_title_adjust("Law","/wiki/Law"); self.assertLess(f,1.0)
-    def test_phrase(self):
-        f,_ = phrase_match_adjust("history of the transistor","covers the history of the transistor in depth"); self.assertGreater(f,1.0)
-    def test_phrase_single_word(self):
-        f,_ = phrase_match_adjust("cats","all about cats"); self.assertEqual(f,1.0)
+class TestTitleMatchAdjust(unittest.TestCase):
+    def test_no_title_returns_neutral(self):
+        factor, signals = title_match_adjust("", {"cats"})
+        self.assertEqual(factor, 1.0)
+        self.assertEqual(signals, [])
+
+    def test_matching_title_term_boosts(self):
+        factor, signals = title_match_adjust("All About Cats", {"cats"})
+        self.assertGreater(factor, 1.0)
+        self.assertTrue(len(signals) > 0)
+
+    def test_generic_verb_damped(self):
+        # "explain" should contribute far less than a specific term of
+        # equal rarity, per GENERIC_TERM_DAMPING.
+        damped_factor, _s1 = title_match_adjust("Explain Something", {"explain"})
+        normal_factor, _s2 = title_match_adjust("Zebra Something", {"zebra"})
+        self.assertLess(damped_factor - 1.0, normal_factor - 1.0)
 
 
-if __name__ == "__main__": unittest.main()
+class TestGenericConceptTitleAdjust(unittest.TestCase):
+    def test_bare_generic_title_penalized(self):
+        factor, signals = generic_concept_title_adjust("Law", "/wiki/Law")
+        self.assertLess(factor, 1.0)
+        self.assertTrue(len(signals) > 0)
+
+    def test_specific_title_not_penalized(self):
+        factor, signals = generic_concept_title_adjust("History of the Transistor", "/wiki/History_of_the_transistor")
+        self.assertEqual(factor, 1.0)
+        self.assertEqual(signals, [])
 
 
+class TestPhraseMatchAdjust(unittest.TestCase):
+    def test_single_word_query_not_boosted(self):
+        factor, signals = phrase_match_adjust("cats", "all about cats here")
+        self.assertEqual(factor, 1.0)
 
+    def test_exact_phrase_match_boosts(self):
+        factor, signals = phrase_match_adjust("history of the transistor",
+            "this article covers the history of the transistor in depth")
+        self.assertGreater(factor, 1.0)
+        self.assertTrue(len(signals) > 0)
+
+    def test_scrambled_words_do_not_match(self):
+        factor, signals = phrase_match_adjust("history of the transistor",
+            "transistor history notes and timeline discussion")
+        self.assertEqual(factor, 1.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

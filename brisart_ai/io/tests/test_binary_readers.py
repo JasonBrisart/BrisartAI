@@ -1,42 +1,4 @@
-"""
-File: brisart_ai/io/tests/test_binary_readers.py
-
-Purpose
--------
-Unit tests for brisart_ai.io.binary_readers. Verifies the module's public
-behavior and its documented edge cases so regressions are caught
-before release. Contains 10 test cases across TestReadDocx, TestReadPptx, TestReadXlsx, TestReadOdt, TestReadPdfBestEffort.
-
-Communication / relationships
-------------------------------
-- exercises brisart_ai.io.binary_readers (read_docx, read_odt, read_pdf_best_effort, read_pptx, read_xlsx)
-
-Settings / parameters
----------------------
-- Standard unittest.TestCase suite; run with pytest
-  (--import-mode=importlib) or `python -m pytest`.
-- Uses only in-memory / temp-dir fixtures where any state is
-  needed; no network, no external services, no shared global state.
-- No tunable parameters of its own; assertions pin the behavior
-  and point values defined in the module under test.
-
-Edge cases
-----------
-- asserts: corrupt docx returns empty string.
-- asserts: missing content xml returns empty.
-
-Known limitations
------------------
-- Covers the behaviors enumerated above; paths not listed here are
-  not asserted by this file and may be covered elsewhere.
-- Deterministic and offline by design; it does not exercise real
-  network, GUI display, or concurrency behavior.
-
-Examples
---------
-    $ python -m pytest brisart_ai/io/tests/test_binary_readers.py -v
-    $ python -m pytest brisart_ai/io/tests/test_binary_readers.py --import-mode=importlib
-"""
+"""Tests for brisart_ai/io/binary_readers.py -- Office/PDF extraction."""
 import tempfile
 import unittest
 import zipfile
@@ -148,6 +110,3 @@ class TestReadPdfBestEffort(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-

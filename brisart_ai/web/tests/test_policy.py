@@ -1,43 +1,4 @@
-"""
-File: brisart_ai/web/tests/test_policy.py
-
-Purpose
--------
-Unit tests for brisart_ai.web.policy. Verifies the module's public
-behavior and its documented edge cases so regressions are caught
-before release. Contains 13 test cases across TestIsLocalOrPrivateHost, TestUserAgent.
-
-Communication / relationships
-------------------------------
-- exercises brisart_ai.web.policy (USER_AGENT, is_local_or_private_host, is_localhost)
-
-Settings / parameters
----------------------
-- Standard unittest.TestCase suite; run with pytest
-  (--import-mode=importlib) or `python -m pytest`.
-- Uses only in-memory / temp-dir fixtures where any state is
-  needed; no network, no external services, no shared global state.
-- No tunable parameters of its own; assertions pin the behavior
-  and point values defined in the module under test.
-
-Edge cases
-----------
-- asserts: localhost string.
-- asserts: localhost suffix.
-- asserts: local suffix.
-
-Known limitations
------------------
-- Covers the behaviors enumerated above; paths not listed here are
-  not asserted by this file and may be covered elsewhere.
-- Deterministic and offline by design; it does not exercise real
-  network, GUI display, or concurrency behavior.
-
-Examples
---------
-    $ python -m pytest brisart_ai/web/tests/test_policy.py -v
-    $ python -m pytest brisart_ai/web/tests/test_policy.py --import-mode=importlib
-"""
+"""Tests for brisart_ai/web/policy.py -- robots.txt + local/private-host safety policy."""
 import unittest
 from brisart_ai.web.policy import USER_AGENT, is_local_or_private_host, is_localhost
 
@@ -89,6 +50,3 @@ class TestUserAgent(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-
