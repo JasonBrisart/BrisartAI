@@ -1,4 +1,4 @@
 @echo off
 title BrisartAI
-py brisartai.py
+py run.py
 pause
